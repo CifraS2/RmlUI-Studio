@@ -1,5 +1,9 @@
-#include "studio_ui.h"
+﻿#include "studio_ui.h"
+#include "platform_utils.h"
 
+#include "../third_party/RmlUi/Backends/RmlUi_Platform_GLFW.h"
+
+#include <GLFW/glfw3.h>
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -9,10 +13,9 @@
 #include <RmlUi/Core/EventListener.h>
 #include <RmlUi/Core/Input.h>
 
-#include <commdlg.h>
-
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -25,22 +28,9 @@ namespace fs = std::filesystem;
 
 namespace {
 
-std::string Utf16ToUtf8(const std::wstring& w) {
-    if (w.empty()) return {};
-    int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
-    if (len <= 0) return {};
-    std::string out(len, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), out.data(), len, nullptr, nullptr);
-    return out;
-}
-
-std::wstring Utf8ToUtf16(const std::string& s) {
-    if (s.empty()) return {};
-    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
-    if (len <= 0) return {};
-    std::wstring out(len, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), out.data(), len);
-    return out;
+uint64_t NowMillis() {
+    using namespace std::chrono;
+    return static_cast<uint64_t>(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
 }
 
 std::string ToLowerAscii(std::string s) {
@@ -59,55 +49,6 @@ std::vector<uint8_t> ReadFileBytes(const std::string& path) {
     f.seekg(0);
     if (!f.read((char*)data.data(), sz)) return {};
     return data;
-}
-
-std::string OpenFileDialog(HWND owner, const wchar_t* filter, const wchar_t* title) {
-    wchar_t buf[MAX_PATH] = {};
-    OPENFILENAMEW ofn{};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = owner;
-    ofn.lpstrFilter = filter;
-    ofn.lpstrFile = buf;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrTitle = title;
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    if (GetOpenFileNameW(&ofn)) return Utf16ToUtf8(buf);
-    return {};
-}
-
-std::string SaveFileDialog(HWND owner, const wchar_t* filter, const wchar_t* def_ext, const wchar_t* default_name, const wchar_t* title) {
-    wchar_t buf[MAX_PATH] = {};
-    if (default_name) wcsncpy_s(buf, default_name, MAX_PATH - 1);
-    OPENFILENAMEW ofn{};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = owner;
-    ofn.lpstrFilter = filter;
-    ofn.lpstrFile = buf;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrDefExt = def_ext;
-    ofn.lpstrTitle = title;
-    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    if (GetSaveFileNameW(&ofn)) return Utf16ToUtf8(buf);
-    return {};
-}
-
-void CopyToClipboard(HWND owner, const std::string& text) {
-    if (!OpenClipboard(owner)) return;
-    EmptyClipboard();
-    std::wstring w = Utf8ToUtf16(text);
-    size_t bytes = (w.size() + 1) * sizeof(wchar_t);
-    HGLOBAL hmem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (hmem) {
-        void* ptr = GlobalLock(hmem);
-        if (ptr) {
-            memcpy(ptr, w.c_str(), bytes);
-            GlobalUnlock(hmem);
-            SetClipboardData(CF_UNICODETEXT, hmem);
-        } else {
-            GlobalFree(hmem);
-        }
-    }
-    CloseClipboard();
 }
 
 std::string EscapeXml(const std::string& s) {
@@ -201,49 +142,31 @@ bool ParseHex6(const std::string& in, RmlColor& out) {
     return true;
 }
 
-Rml::Input::KeyIdentifier Win32VkToRmlKey(UINT vk) {
-    using namespace Rml::Input;
-    switch (vk) {
-    case VK_BACK: return KI_BACK;
-    case VK_TAB: return KI_TAB;
-    case VK_RETURN: return KI_RETURN;
-    case VK_ESCAPE: return KI_ESCAPE;
-    case VK_SPACE: return KI_SPACE;
-    case VK_LEFT: return KI_LEFT;
-    case VK_RIGHT: return KI_RIGHT;
-    case VK_UP: return KI_UP;
-    case VK_DOWN: return KI_DOWN;
-    case VK_HOME: return KI_HOME;
-    case VK_END: return KI_END;
-    case VK_DELETE: return KI_DELETE;
-    case VK_INSERT: return KI_INSERT;
-    case VK_PRIOR: return KI_PRIOR;
-    case VK_NEXT: return KI_NEXT;
-    case VK_SHIFT:
-    case VK_LSHIFT: return KI_LSHIFT;
-    case VK_RSHIFT: return KI_RSHIFT;
-    case VK_CONTROL:
-    case VK_LCONTROL: return KI_LCONTROL;
-    case VK_RCONTROL: return KI_RCONTROL;
-    case VK_MENU:
-    case VK_LMENU: return KI_LMENU;
-    case VK_RMENU: return KI_RMENU;
-    case 'A': return KI_A;
-    case 'C': return KI_C;
-    case 'H': return KI_H;
-    case 'V': return KI_V;
-    case 'X': return KI_X;
-    case 'Y': return KI_Y;
-    case 'Z': return KI_Z;
-    default: return KI_UNKNOWN;
-    }
+bool IsCtrlDown(GLFWwindow* w) {
+    if (!w) return false;
+    return glfwGetKey(w, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+           glfwGetKey(w, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS ||
+           glfwGetKey(w, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS ||
+           glfwGetKey(w, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
 }
 
-int GetRmlKeyModifiers() {
+bool IsShiftDown(GLFWwindow* w) {
+    if (!w) return false;
+    return glfwGetKey(w, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+           glfwGetKey(w, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+}
+
+bool IsAltDown(GLFWwindow* w) {
+    if (!w) return false;
+    return glfwGetKey(w, GLFW_KEY_LEFT_ALT) == GLFW_PRESS ||
+           glfwGetKey(w, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
+}
+
+int GetRmlKeyModifiers(GLFWwindow* w) {
     int mods = 0;
-    if (GetKeyState(VK_CONTROL) & 0x8000) mods |= Rml::Input::KM_CTRL;
-    if (GetKeyState(VK_SHIFT) & 0x8000) mods |= Rml::Input::KM_SHIFT;
-    if (GetKeyState(VK_MENU) & 0x8000) mods |= Rml::Input::KM_ALT;
+    if (IsCtrlDown(w)) mods |= Rml::Input::KM_CTRL;
+    if (IsShiftDown(w)) mods |= Rml::Input::KM_SHIFT;
+    if (IsAltDown(w)) mods |= Rml::Input::KM_ALT;
     return mods;
 }
 
@@ -3282,7 +3205,8 @@ const char* kEditorRml = R"RML(<rml>
 } // namespace
 
 struct StudioUI::Impl {
-    HWND hwnd = nullptr;
+    GLFWwindow* window = nullptr;
+    std::function<void()> on_toggle_fullscreen;
     RmlDocument* doc = nullptr;
     RmlEngineHost* engine = nullptr;
     Rml::ElementDocument* ui_doc = nullptr;
@@ -3496,12 +3420,12 @@ struct StudioUI::Impl {
             t->SetClass("hidden", false);
         }
         toast_visible = true;
-        toast_hide_at_ms = GetTickCount64() + 2300ULL;
+        toast_hide_at_ms = NowMillis() + 2300ULL;
     }
 
     void UpdateToastTimer() {
         if (!toast_visible || !ui_doc) return;
-        if (GetTickCount64() >= toast_hide_at_ms) {
+        if (NowMillis() >= toast_hide_at_ms) {
             if (auto* t = ui_doc->GetElementById("toast")) {
                 t->SetClass("hidden", true);
             }
@@ -3532,8 +3456,8 @@ struct StudioUI::Impl {
                 action == "del_node" || action == "empty_add") {
                 ev.StopPropagation();
             }
-            bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0 || ev.GetParameter<bool>("ctrl_key", false);
-            bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0 || ev.GetParameter<bool>("shift_key", false);
+            bool ctrl = IsCtrlDown(self->window) || ev.GetParameter<bool>("ctrl_key", false);
+            bool shift = IsShiftDown(self->window) || ev.GetParameter<bool>("shift_key", false);
             self->pending_cmds.push_back({action, node_id, ctrl, shift, "", is_popup_item});
         }
     };
@@ -3570,7 +3494,7 @@ struct StudioUI::Impl {
         undo_stack.pop_back();
         doc->Touch();
         SyncUIFromDoc(true);
-        ShowToast("Ação desfeita");
+        ShowToast("AÃ§Ã£o desfeita");
     }
 
     void Redo() {
@@ -3580,7 +3504,7 @@ struct StudioUI::Impl {
         redo_stack.pop_back();
         doc->Touch();
         SyncUIFromDoc(true);
-        ShowToast("Ação refeita");
+        ShowToast("AÃ§Ã£o refeita");
     }
 
     bool GetNodeCanvasBounds(int id, float& wx, float& wy, float& ww, float& wh) const {
@@ -4574,11 +4498,11 @@ struct StudioUI::Impl {
             };
         } else if (menu == "view") {
             items = {
-                {"pop-rul", show_rulers ? "Ocultar Réguas" : "Mostrar Réguas", "toggle_rulers"},
-                {"pop-rlat", show_left_ruler ? "Ocultar Régua Lateral" : "Mostrar Régua Lateral", "toggle_left_ruler"},
+                {"pop-rul", show_rulers ? "Ocultar RÃ©guas" : "Mostrar RÃ©guas", "toggle_rulers"},
+                {"pop-rlat", show_left_ruler ? "Ocultar RÃ©gua Lateral" : "Mostrar RÃ©gua Lateral", "toggle_left_ruler"},
                 {"pop-grd", show_grid ? "Ocultar Grade" : "Mostrar Grade", "toggle_grid"},
                 {"pop-snap", snap_guides ? "Desativar Guias Inteligentes" : "Ativar Guias Inteligentes", "toggle_snap"},
-                {"pop-bot", show_bottom_dock ? "Ocultar Painel de Código" : "Mostrar Painel de Código", "toggle_bottom_dock"},
+                {"pop-bot", show_bottom_dock ? "Ocultar Painel de CÃ³digo" : "Mostrar Painel de CÃ³digo", "toggle_bottom_dock"},
                 {"pop-fs", "Tela Cheia (F11)", "toggle_fullscreen"},
                 {"", "", "", true},
                 {"pop-z100", "Resetar Zoom (100%)", "z100"},
@@ -4589,7 +4513,7 @@ struct StudioUI::Impl {
                 {"pop-pc", "Desktop 1920x1080", "vp_pc"},
                 {"pop-hd", "HD 1280x720", "vp_hd"},
                 {"", "", "", true},
-                {"pop-safe", "Alternar Área Segura", "vp_safe"},
+                {"pop-safe", "Alternar Ãrea Segura", "vp_safe"},
                 {"pop-bgd", "Fundo: Escuro (#0E1117)", "bg_dark"},
                 {"pop-bgw", "Fundo: Branco (#FFFFFF)", "bg_white"},
                 {"pop-bgy", "Fundo: Cinza (#CBD5E1)", "bg_gray"},
@@ -4607,7 +4531,7 @@ struct StudioUI::Impl {
             items = {
                 {"pop-adiv", "Container (div)", "add_div"},
                 {"pop-atxt", "Texto (span)", "add_txt"},
-                {"pop-abtn", "Botão (button)", "add_btn"},
+                {"pop-abtn", "BotÃ£o (button)", "add_btn"},
                 {"pop-ainp", "Campo Input (input)", "add_inp"},
                 {"pop-aimg", "Imagem (img)...", "add_img"},
                 {"pop-abar", "Barra de Progresso", "add_bar"},
@@ -4808,16 +4732,19 @@ struct StudioUI::Impl {
         if (action == "empty_add") { OpenPopupNearElement("add",  "btn-empty-add", (float)win_w * 0.5f - 115.0f, (float)win_h * 0.45f); return; }
         if (action == "insp_more") { OpenPopupNearElement("edit", "btn-insp-more", (float)win_w - 245.0f, 138.0f); return; }
         if (action == "help") {
-            ShowToast("Atalhos: V Selecionar | H/Espaço Pan | Ctrl+Z/Y | Ctrl+D | Del");
+            ShowToast("Atalhos: V Selecionar | H/EspaÃ§o Pan | Ctrl+Z/Y | Ctrl+D | Del");
             return;
         }
         if (action == "settings") {
             safe_area = !safe_area;
             overlay_dirty = true;
-            ShowToast(safe_area ? "Área segura ativada" : "Área segura oculta");
+            ShowToast(safe_area ? "Ãrea segura ativada" : "Ãrea segura oculta");
             return;
         }
-        if (action == "exit_app") { PostMessageW(hwnd, WM_CLOSE, 0, 0); return; }
+        if (action == "exit_app") {
+            if (window) glfwSetWindowShouldClose(window, GLFW_TRUE);
+            return;
+        }
 
         if (action == "new") {
             PushUndo();
@@ -4830,7 +4757,7 @@ struct StudioUI::Impl {
             FitViewport();
             ShowToast("Novo projeto criado");
         } else if (action == "import_rml" || action == "open") {
-            std::string path = OpenFileDialog(hwnd, L"Arquivos RmlUi (*.rml)\0*.rml\0Todos (*.*)\0*.*\0", L"Importar arquivo .rml");
+            std::string path = Platform::OpenFileDialog(window, "Importar arquivo .rml", {{"Arquivos RmlUi (*.rml)", "*.rml"}, {"Todos (*.*)", "*.*"}});
             if (!path.empty()) {
                 RmlDocument loaded;
                 std::string err;
@@ -4849,7 +4776,7 @@ struct StudioUI::Impl {
                 }
             }
         } else if (action == "import_rcss") {
-            std::string path = OpenFileDialog(hwnd, L"Estilos RmlUi (*.rcss;*.css)\0*.rcss;*.css\0Todos (*.*)\0*.*\0", L"Importar arquivo .rcss");
+            std::string path = Platform::OpenFileDialog(window, "Importar arquivo .rcss", {{"Estilos RmlUi (*.rcss;*.css)", "*.rcss;*.css"}, {"Todos (*.*)", "*.*"}});
             if (!path.empty()) {
                 ExecuteImportRcss(path);
             }
@@ -4890,7 +4817,7 @@ struct StudioUI::Impl {
             OpenColorPicker(ColorTarget::NodeGrid, "swatch-grid");
             return;
         } else if (action == "toggle_fullscreen") {
-            PostMessageW(hwnd, WM_APP + 101, 0, 0);
+            if (on_toggle_fullscreen) on_toggle_fullscreen();
             return;
         } else if (action == "toggle_bottom_dock") {
             show_bottom_dock = !show_bottom_dock;
@@ -4944,7 +4871,7 @@ struct StudioUI::Impl {
             }
             return;
         } else if (action == "export") {
-            std::string path = SaveFileDialog(hwnd, L"Arquivos RmlUi (*.rml)\0*.rml\0", L"rml", L"interface.rml", L"Exportar .rml + .rcss");
+            std::string path = Platform::SaveFileDialog(window, "Exportar .rml + .rcss", "rml", {{"Arquivos RmlUi (*.rml)", "*.rml"}});
             if (!path.empty()) {
                 std::string err;
                 if (doc->ExportToPath(path, err)) {
@@ -5030,7 +4957,7 @@ struct StudioUI::Impl {
             if (auto* b = ui_doc->GetElementById("btn-play")) b->SetClass("btn-play-on", play_mode);
             if (auto* lbl = ui_doc->GetElementById("lbl-play")) lbl->SetInnerRML(play_mode ? "Parar" : "Pr&#233;-visualizar");
             if (auto* ico = ui_doc->GetElementById("ico-play")) ico->SetAttribute("src", play_mode ? "studio_ico_stop" : "studio_ico_play");
-            ShowToast(play_mode ? "Pré-visualização iniciada" : "Modo editor restaurado");
+            ShowToast(play_mode ? "PrÃ©-visualizaÃ§Ã£o iniciada" : "Modo editor restaurado");
         } else if (action == "tool_sel") {
             hand_tool = false;
         } else if (action == "tool_pan") {
@@ -5050,22 +4977,22 @@ struct StudioUI::Impl {
                 doc->GenerateRmlAndRcss(rml, rcss, assets);
                 cur_code = (code_tab == "RCSS") ? rcss : rml;
             }
-            CopyToClipboard(hwnd, cur_code);
-            ShowToast(code_tab + " copiado para a área de transferência");
+            Platform::CopyToClipboard(window, cur_code);
+            ShowToast(code_tab + " copiado para a Ã¡rea de transferÃªncia");
             return;
         } else if (action == "copy_rml") {
             std::string rml, rcss;
             std::vector<RmlAsset> assets;
             doc->GenerateRmlAndRcss(rml, rcss, assets);
-            CopyToClipboard(hwnd, rml);
-            ShowToast("RML copiado para a área de transferência");
+            Platform::CopyToClipboard(window, rml);
+            ShowToast("RML copiado para a Ã¡rea de transferÃªncia");
             return;
         } else if (action == "copy_rcss") {
             std::string rml, rcss;
             std::vector<RmlAsset> assets;
             doc->GenerateRmlAndRcss(rml, rcss, assets);
-            CopyToClipboard(hwnd, rcss);
-            ShowToast("RCSS copiado para a área de transferência");
+            Platform::CopyToClipboard(window, rcss);
+            ShowToast("RCSS copiado para a Ã¡rea de transferÃªncia");
             return;
         } else if (action == "u_px" || action == "u_pct" || action == "u_dp") {
             unit_mode = (action == "u_pct") ? "%" : (action == "u_dp" ? "dp" : "px");
@@ -5254,7 +5181,7 @@ struct StudioUI::Impl {
             float ox = (pid == doc->root_id) ? 160.0f : 20.0f;
             float oy = (pid == doc->root_id) ? 200.0f : 20.0f;
             SetSingleSelection(doc->AddButton(pid, "Botao", ox, oy, 180.0f, 40.0f));
-            ShowToast("Botão adicionado ao canvas");
+            ShowToast("BotÃ£o adicionado ao canvas");
         } else if (action == "add_inp" || action == "pref_inp") {
             PushUndo();
             int pid = ResolveTargetContainer();
@@ -5263,7 +5190,7 @@ struct StudioUI::Impl {
             SetSingleSelection(doc->AddInput(pid, "Digite aqui...", ox, oy, 260.0f, 36.0f));
             ShowToast("Input adicionado ao canvas");
         } else if (action == "add_img") {
-            std::string path = OpenFileDialog(hwnd, L"Imagens (*.png;*.jpg;*.jpeg;*.bmp)\0*.png;*.jpg;*.jpeg;*.bmp\0Todos (*.*)\0*.*\0", L"Selecionar Imagem");
+            std::string path = Platform::OpenFileDialog(window, "Selecionar Imagem", {{"Imagens (*.png;*.jpg;*.jpeg;*.bmp)", "*.png;*.jpg;*.jpeg;*.bmp"}, {"Todos (*.*)", "*.*"}});
             if (!path.empty()) {
                 PushUndo();
                 int pid = ResolveTargetContainer();
@@ -5338,7 +5265,7 @@ struct StudioUI::Impl {
             ShowToast("Grid adicionada ao canvas");
         } else if (action == "pick_img") {
             if (auto* n = doc->FindNode(PrimaryId())) {
-                std::string path = OpenFileDialog(hwnd, L"Imagens (*.png;*.jpg;*.jpeg;*.bmp)\0*.png;*.jpg;*.jpeg;*.bmp\0Todos (*.*)\0*.*\0", L"Selecionar Imagem");
+                std::string path = Platform::OpenFileDialog(window, "Selecionar Imagem", {{"Imagens (*.png;*.jpg;*.jpeg;*.bmp)", "*.png;*.jpg;*.jpeg;*.bmp"}, {"Todos (*.*)", "*.*"}});
                 if (!path.empty()) {
                     PushUndo();
                     n->image_bytes = ReadFileBytes(path);
@@ -5389,7 +5316,7 @@ struct StudioUI::Impl {
     }
 
     void RecordPropUndoBurst(const std::string& key) {
-        uint64_t now_ms = GetTickCount64();
+        uint64_t now_ms = NowMillis();
         if (last_prop_undo_field != key || (now_ms - last_prop_undo_ms) > 850ULL) {
             PushUndo();
             last_prop_undo_field = key;
@@ -5524,7 +5451,7 @@ struct StudioUI::Impl {
         if (field == "code-editor") {
             if (!engine) return;
             std::string code = GetInputValue("code-editor");
-            uint64_t now_ms = GetTickCount64();
+            uint64_t now_ms = NowMillis();
             if (last_code_undo_tab != code_tab || (now_ms - last_code_undo_ms) > 900ULL) {
                 PushUndo();
                 last_code_undo_ms = now_ms;
@@ -6154,15 +6081,15 @@ struct StudioUI::Impl {
 StudioUI::StudioUI() : impl_(std::make_unique<Impl>()) {}
 StudioUI::~StudioUI() = default;
 
-bool StudioUI::Init(HWND hwnd, RmlDocument& doc, RmlEngineHost& engine) {
-    impl_->hwnd = hwnd;
+bool StudioUI::Init(GLFWwindow* window, RmlDocument& doc, RmlEngineHost& engine) {
+    impl_->window = window;
     impl_->doc = &doc;
     impl_->engine = &engine;
 
-    RECT rc{};
-    GetClientRect(hwnd, &rc);
-    impl_->win_w = std::max(1, (int)(rc.right - rc.left));
-    impl_->win_h = std::max(1, (int)(rc.bottom - rc.top));
+    int fw = 1440, fh = 860;
+    if (window) glfwGetWindowSize(window, &fw, &fh);
+    impl_->win_w = std::max(1, fw);
+    impl_->win_h = std::max(1, fh);
 
     impl_->ui_doc = engine.LoadEditorDocument(kEditorRml, kEditorRcss);
     if (!impl_->ui_doc) return false;
@@ -6398,7 +6325,7 @@ void StudioUI::OnMouseMove(int x, int y) {
         float dx = cx - impl_->drag_start_sx;
         float dy = cy - impl_->drag_start_sy;
         if (impl_->drag_mode == Impl::DragMode::Move) {
-            bool bypass_snap = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            bool bypass_snap = IsCtrlDown(impl_->window);
             float snapped_dx = dx, snapped_dy = dy;
             impl_->ComputeDragSnapMove(impl_->PrimaryId(), dx, dy, bypass_snap, snapped_dx, snapped_dy);
             impl_->drag_dirty_node_ids.clear();
@@ -6419,7 +6346,7 @@ void StudioUI::OnMouseMove(int x, int y) {
                 if (h == 2 || h == 3 || h == 4) { nw = std::max(12.0f, nw + dx); }
                 if (h == 0 || h == 1 || h == 2) { float d = std::min(dy, nh - 12.0f); ny += d; nh -= d; }
                 if (h == 4 || h == 5 || h == 6) { nh = std::max(12.0f, nh + dy); }
-                bool bypass_snap = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                bool bypass_snap = IsCtrlDown(impl_->window);
                 impl_->ComputeDragSnapResize(n->id, h, bypass_snap, nx, ny, nw, nh);
                 n->x = std::round(nx);
                 n->y = std::round(ny);
@@ -6445,7 +6372,7 @@ void StudioUI::OnMouseMove(int x, int y) {
     }
 
     if (auto* ectx = impl_->engine->EditorContext()) {
-        ectx->ProcessMouseMove(x, y, GetRmlKeyModifiers());
+        ectx->ProcessMouseMove(x, y, GetRmlKeyModifiers(impl_->window));
     }
 }
 
@@ -6456,29 +6383,25 @@ void StudioUI::OnMouseButton(int button, bool down) {
 
     if (button == 0 && !down && impl_->cp_drag != Impl::CpDrag::None) {
         impl_->cp_drag = Impl::CpDrag::None;
-        ReleaseCapture();
-        return;
+                return;
     }
 
     if (button == 0 && down && impl_->cp_open) {
         if (impl_->IsPointOverElement("cp-sv-bg", x, y)) {
             impl_->cp_drag = Impl::CpDrag::SV;
             impl_->UpdateColorPickerFromSVMouse(x, y);
-            SetCapture(impl_->hwnd);
-            return;
+                        return;
         }
         if (impl_->IsPointOverElement("cp-hue-wrap", x, y)) {
             impl_->cp_drag = Impl::CpDrag::Hue;
             impl_->UpdateColorPickerFromHueMouse(y);
-            SetCapture(impl_->hwnd);
-            return;
+                        return;
         }
     }
 
     if (button == 0 && !down && impl_->splitter_drag != Impl::SplitterDrag::None) {
         impl_->splitter_drag = Impl::SplitterDrag::None;
-        ReleaseCapture();
-        return;
+                return;
     }
 
     if (button == 0 && down && !impl_->active_menu.empty()) {
@@ -6488,7 +6411,7 @@ void StudioUI::OnMouseButton(int button, bool down) {
         }
         if (inside_popup) {
             if (auto* ectx = impl_->engine->EditorContext()) {
-                ectx->ProcessMouseButtonDown(button, GetRmlKeyModifiers());
+                ectx->ProcessMouseButtonDown(button, GetRmlKeyModifiers(impl_->window));
             }
             return;
         }
@@ -6504,15 +6427,13 @@ void StudioUI::OnMouseButton(int button, bool down) {
                 impl_->splitter_drag = Impl::SplitterDrag::Left;
                 impl_->split_start_mouse = x;
                 impl_->split_start_size = impl_->left_panel_width;
-                SetCapture(impl_->hwnd);
-                return;
+                                return;
             }
             if (x >= (int)(sx_right - 2.0f) && x <= (int)(sx_right + Impl::kSplitW + 2.0f)) {
                 impl_->splitter_drag = Impl::SplitterDrag::Right;
                 impl_->split_start_mouse = x;
                 impl_->split_start_size = impl_->right_inspector_width;
-                SetCapture(impl_->hwnd);
-                return;
+                                return;
             }
             if (impl_->show_bottom_dock) {
                 float sy_bot = bot_y - impl_->bottom_dock_height - Impl::kSplitW;
@@ -6521,8 +6442,7 @@ void StudioUI::OnMouseButton(int button, bool down) {
                     impl_->splitter_drag = Impl::SplitterDrag::Bottom;
                     impl_->split_start_mouse = y;
                     impl_->split_start_size = impl_->bottom_dock_height;
-                    SetCapture(impl_->hwnd);
-                    return;
+                                        return;
                 }
             }
         }
@@ -6535,13 +6455,11 @@ void StudioUI::OnMouseButton(int button, bool down) {
             impl_->pan_start_my = y;
             impl_->pan_start_x = impl_->pan_x;
             impl_->pan_start_y = impl_->pan_y;
-            SetCapture(impl_->hwnd);
-            return;
+                        return;
         }
         if (!down && impl_->panning) {
             impl_->panning = false;
-            ReleaseCapture();
-            return;
+                        return;
         }
     }
 
@@ -6549,8 +6467,7 @@ void StudioUI::OnMouseButton(int button, bool down) {
         impl_->drag_pending = false;
         impl_->drag_did_move = false;
         impl_->drag_multi_orig.clear();
-        ReleaseCapture();
-        return;
+                return;
     }
 
     if (!down && impl_->drag_mode != Impl::DragMode::None) {
@@ -6560,8 +6477,7 @@ void StudioUI::OnMouseButton(int button, bool down) {
         impl_->drag_did_move = false;
         impl_->drag_transform_ui_dirty = false;
         impl_->active_guides.clear();
-        ReleaseCapture();
-        if (!impl_->doc->has_imported_source && did_move &&
+                if (!impl_->doc->has_imported_source && did_move &&
             prev_mode == Impl::DragMode::Move && impl_->drag_multi_orig.size() == 1) {
             impl_->AutoReparentAfterMove(impl_->drag_multi_orig[0].id);
         }
@@ -6610,14 +6526,13 @@ void StudioUI::OnMouseButton(int button, bool down) {
                             impl_->orig_y = ry;
                             impl_->orig_w = rw;
                             impl_->orig_h = rh;
-                            SetCapture(impl_->hwnd);
-                            return;
+                                                        return;
                         }
                     }
                 }
             }
 
-            bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            bool ctrl = IsCtrlDown(impl_->window);
             int hit = impl_->engine->PickNodeAtCanvasPoint(cx, cy);
             if (hit <= 0) hit = impl_->doc->HitTest(cx, cy);
             if (hit > 0) {
@@ -6657,8 +6572,7 @@ void StudioUI::OnMouseButton(int button, bool down) {
                     impl_->drag_down_my = y;
                     impl_->drag_start_sx = cx;
                     impl_->drag_start_sy = cy;
-                    SetCapture(impl_->hwnd);
-                }
+                                    }
             } else if (!ctrl) {
                 impl_->SetSingleSelection(impl_->doc->root_id);
                 impl_->SyncUIFromDoc(true);
@@ -6668,7 +6582,7 @@ void StudioUI::OnMouseButton(int button, bool down) {
     }
 
     if (auto* ectx = impl_->engine->EditorContext()) {
-        int mods = GetRmlKeyModifiers();
+        int mods = GetRmlKeyModifiers(impl_->window);
         if (down) {
             ectx->ProcessMouseButtonDown(button, mods);
             if (button == 0) {
@@ -6745,23 +6659,21 @@ void StudioUI::OnMouseWheel(float delta) {
                 }
             }
             if (over_focused) {
-                bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                bool shift = IsShiftDown(impl_->window);
                 if (impl_->StepNumericPropByWheel(focused_num_id, delta, shift)) {
                     return;
                 }
             }
         }
-        ectx->ProcessMouseWheel(Rml::Vector2f(0.0f, -delta), GetRmlKeyModifiers());
+        ectx->ProcessMouseWheel(Rml::Vector2f(0.0f, -delta), GetRmlKeyModifiers(impl_->window));
         impl_->SyncCodeGutter(false);
     }
 }
 
-void StudioUI::OnKey(UINT vk, bool down, WPARAM wparam, LPARAM lparam) {
-    (void)wparam;
-    (void)lparam;
-    if (vk == VK_SPACE) impl_->space_down = down;
+void StudioUI::OnKey(int key, bool down, int mods) {
+    if (key == GLFW_KEY_SPACE) impl_->space_down = down;
 
-    if (down && vk == VK_ESCAPE && impl_->cp_open) {
+    if (down && key == GLFW_KEY_ESCAPE && impl_->cp_open) {
         impl_->CloseColorPicker(true);
         return;
     }
@@ -6778,13 +6690,14 @@ void StudioUI::OnKey(UINT vk, bool down, WPARAM wparam, LPARAM lparam) {
         }
     }
 
+    const bool ctrl = (mods & GLFW_MOD_CONTROL) != 0 || IsCtrlDown(impl_->window);
+    const bool shift = (mods & GLFW_MOD_SHIFT) != 0 || IsShiftDown(impl_->window);
+
     if (down && code_editor_focused) {
         if (auto* ectx = impl_->engine ? impl_->engine->EditorContext() : nullptr) {
-            bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             auto* ta = impl_->ui_doc ? dynamic_cast<Rml::ElementFormControlTextArea*>(impl_->ui_doc->GetElementById("code-editor")) : nullptr;
 
-            if (vk == VK_RETURN) {
+            if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) {
                 std::string indent;
                 bool extra_indent = false;
                 if (ta) {
@@ -6817,7 +6730,7 @@ void StudioUI::OnKey(UINT vk, bool down, WPARAM wparam, LPARAM lparam) {
                 impl_->SyncCodeGutter(true);
                 return;
             }
-            if (vk == VK_TAB) {
+            if (key == GLFW_KEY_TAB) {
                 if (shift && ta) {
                     int sel_s = 0, sel_e = 0;
                     ta->GetSelection(&sel_s, &sel_e, nullptr);
@@ -6845,7 +6758,7 @@ void StudioUI::OnKey(UINT vk, bool down, WPARAM wparam, LPARAM lparam) {
                 impl_->SyncCodeGutter(false);
                 return;
             }
-            if (ctrl && vk == VK_OEM_2 && ta) {
+            if (ctrl && key == GLFW_KEY_SLASH && ta) {
                 int sel_s = 0, sel_e = 0;
                 ta->GetSelection(&sel_s, &sel_e, nullptr);
                 std::string val = ta->GetValue();
@@ -6878,14 +6791,14 @@ void StudioUI::OnKey(UINT vk, bool down, WPARAM wparam, LPARAM lparam) {
                 }
                 return;
             }
-            if (ctrl && vk == 'Z') {
+            if (ctrl && key == GLFW_KEY_Z) {
                 impl_->Undo();
                 if (impl_->ui_doc) {
                     if (auto* ce = impl_->ui_doc->GetElementById("code-editor")) ce->Focus();
                 }
                 return;
             }
-            if (ctrl && vk == 'Y') {
+            if (ctrl && key == GLFW_KEY_Y) {
                 impl_->Redo();
                 if (impl_->ui_doc) {
                     if (auto* ce = impl_->ui_doc->GetElementById("code-editor")) ce->Focus();
@@ -6896,24 +6809,23 @@ void StudioUI::OnKey(UINT vk, bool down, WPARAM wparam, LPARAM lparam) {
     }
 
     if (down && !editor_input_focused && !impl_->play_mode) {
-        bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-        if (ctrl && vk == 'Z') { impl_->Undo(); return; }
-        if (ctrl && vk == 'Y') { impl_->Redo(); return; }
-        if (ctrl && vk == 'D') { impl_->DuplicateSpecificNode(impl_->PrimaryId()); return; }
-        if (vk == 'V') { impl_->hand_tool = false; impl_->UpdateHeaderButtonsUI(); return; }
-        if (vk == 'H') { impl_->hand_tool = true; impl_->UpdateHeaderButtonsUI(); return; }
-        if (vk == VK_DELETE && impl_->doc) {
+        if (ctrl && key == GLFW_KEY_Z) { impl_->Undo(); return; }
+        if (ctrl && key == GLFW_KEY_Y) { impl_->Redo(); return; }
+        if (ctrl && key == GLFW_KEY_D) { impl_->DuplicateSpecificNode(impl_->PrimaryId()); return; }
+        if (key == GLFW_KEY_V) { impl_->hand_tool = false; impl_->UpdateHeaderButtonsUI(); return; }
+        if (key == GLFW_KEY_H) { impl_->hand_tool = true; impl_->UpdateHeaderButtonsUI(); return; }
+        if (key == GLFW_KEY_DELETE && impl_->doc) {
             impl_->DeleteSpecificNode(impl_->PrimaryId());
             return;
         }
     }
 
     if (auto* ectx = impl_->engine ? impl_->engine->EditorContext() : nullptr) {
-        auto key = Win32VkToRmlKey(vk);
-        if (key != Rml::Input::KI_UNKNOWN) {
-            int mods = GetRmlKeyModifiers();
-            if (down) ectx->ProcessKeyDown(key, mods);
-            else ectx->ProcessKeyUp(key, mods);
+        auto rml_key = RmlGLFW::ConvertKey(key);
+        if (rml_key != Rml::Input::KI_UNKNOWN) {
+            int rml_mods = GetRmlKeyModifiers(impl_->window);
+            if (down) ectx->ProcessKeyDown(rml_key, rml_mods);
+            else ectx->ProcessKeyUp(rml_key, rml_mods);
         }
     }
 }
@@ -6929,7 +6841,11 @@ void StudioUI::OnChar(uint32_t codepoint) {
     }
 }
 
-void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11DeviceContext* ctx, int width, int height) {
+void StudioUI::SetToggleFullscreenCallback(std::function<void()> cb) {
+    if (impl_) impl_->on_toggle_fullscreen = std::move(cb);
+}
+
+void StudioUI::UpdateAndRender(GlRenderer2D& gl, int width, int height) {
     if (!impl_->doc || !impl_->engine) return;
 
     impl_->DrainPendingCommands();
@@ -6944,7 +6860,7 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
     impl_->SyncCodeGutter(false);
 
     if (impl_->play_mode) {
-        impl_->engine->RenderCanvasInteractive(device, ctx);
+        impl_->engine->RenderCanvasInteractive();
     } else if (impl_->drag_mode != Impl::DragMode::None && !impl_->drag_dirty_node_ids.empty()) {
         bool fallback_full = false;
         for (int nid : impl_->drag_dirty_node_ids) {
@@ -6965,18 +6881,18 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
             }
         }
         if (fallback_full) {
-            impl_->engine->SyncAndRenderCanvas(*impl_->doc, device, ctx);
+            impl_->engine->SyncAndRenderCanvas(*impl_->doc);
         } else {
-            impl_->engine->FlushCanvasRender(device, ctx);
+            impl_->engine->FlushCanvasRender();
         }
         impl_->drag_dirty_node_ids.clear();
     } else {
-        impl_->engine->SyncAndRenderCanvas(*impl_->doc, device, ctx);
+        impl_->engine->SyncAndRenderCanvas(*impl_->doc);
     }
 
     impl_->SyncArtboardOverlay();
 
-    dx.BeginFrame(ctx, width, height);
+    gl.BeginFrame(width, height);
 
     float cw = (float)impl_->doc->screen_width * impl_->zoom;
     float ch = (float)impl_->doc->screen_height * impl_->zoom;
@@ -6988,7 +6904,7 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
     float vp_x1 = (float)width - impl_->RightTotal();
     float vp_y1 = (float)height - impl_->BottomTotal();
 
-    dx.SetScissor(ctx, (int)vp_x0, (int)vp_y0, (int)(vp_x1 - vp_x0), (int)(vp_y1 - vp_y0));
+    gl.SetScissor((int)vp_x0, (int)vp_y0, (int)(vp_x1 - vp_x0), (int)(vp_y1 - vp_y0));
 
     // Canvas board background (Escuro / Branco / Cinza / Custom)
     RmlColor brd_col{14, 17, 23, 255};
@@ -6997,30 +6913,30 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
     else if (impl_->bg_style == Impl::BgStyle::Custom) brd_col = impl_->canvas_bg_color;
     else brd_col = {14, 17, 23, 255};
 
-    dx.DrawRectFilled(ctx, vp_x0, vp_y0, vp_x1 - vp_x0, vp_y1 - vp_y0, brd_col.r, brd_col.g, brd_col.b, 255);
+    gl.DrawRectFilled(vp_x0, vp_y0, vp_x1 - vp_x0, vp_y1 - vp_y0, brd_col.r, brd_col.g, brd_col.b, 255);
 
     // Artboard soft drop shadow
-    dx.DrawRectFilled(ctx, px - 6.0f, py + 4.0f, cw + 12.0f, ch + 14.0f, 0, 0, 0, 55);
-    dx.DrawRectFilled(ctx, px - 2.0f, py + 2.0f, cw + 4.0f, ch + 6.0f, 0, 0, 0, 75);
+    gl.DrawRectFilled(px - 6.0f, py + 4.0f, cw + 12.0f, ch + 14.0f, 0, 0, 0, 55);
+    gl.DrawRectFilled(px - 2.0f, py + 2.0f, cw + 4.0f, ch + 6.0f, 0, 0, 0, 75);
 
     // Artboard base backdrop inside bounds
     if (impl_->bg_style == Impl::BgStyle::Gta) {
-        dx.DrawRectFilled(ctx, px, py, cw, ch * 0.58f, 68, 138, 204, 255);
-        dx.DrawRectFilled(ctx, px, py + ch * 0.58f, cw, ch * 0.42f, 44, 52, 62, 255);
-        dx.DrawRectFilled(ctx, px + cw * 0.10f, py + ch * 0.36f, cw * 0.08f, ch * 0.22f, 52, 68, 88, 255);
-        dx.DrawRectFilled(ctx, px + cw * 0.22f, py + ch * 0.28f, cw * 0.07f, ch * 0.30f, 46, 62, 82, 255);
-        dx.DrawRectFilled(ctx, px + cw * 0.70f, py + ch * 0.32f, cw * 0.11f, ch * 0.26f, 50, 66, 86, 255);
+        gl.DrawRectFilled(px, py, cw, ch * 0.58f, 68, 138, 204, 255);
+        gl.DrawRectFilled(px, py + ch * 0.58f, cw, ch * 0.42f, 44, 52, 62, 255);
+        gl.DrawRectFilled(px + cw * 0.10f, py + ch * 0.36f, cw * 0.08f, ch * 0.22f, 52, 68, 88, 255);
+        gl.DrawRectFilled(px + cw * 0.22f, py + ch * 0.28f, cw * 0.07f, ch * 0.30f, 46, 62, 82, 255);
+        gl.DrawRectFilled(px + cw * 0.70f, py + ch * 0.32f, cw * 0.11f, ch * 0.26f, 50, 66, 86, 255);
     } else {
-        dx.DrawRectFilled(ctx, px, py, cw, ch, brd_col.r, brd_col.g, brd_col.b, 255);
+        gl.DrawRectFilled(px, py, cw, ch, brd_col.r, brd_col.g, brd_col.b, 255);
         if (const auto* root_node = impl_->doc->FindNode(impl_->doc->root_id)) {
             if (!impl_->doc->has_imported_source && root_node->has_bg) {
-                dx.DrawRectFilled(ctx, px, py, cw, ch, root_node->bg_color.r, root_node->bg_color.g, root_node->bg_color.b, root_node->bg_color.a);
+                gl.DrawRectFilled(px, py, cw, ch, root_node->bg_color.r, root_node->bg_color.g, root_node->bg_color.b, root_node->bg_color.a);
             }
         }
     }
 
-    if (auto* canvas_srv = impl_->engine->CanvasSRV()) {
-        dx.DrawTexturedQuad(ctx, canvas_srv, px, py, cw, ch);
+    if (unsigned int canvas_tex = impl_->engine->CanvasTexture()) {
+        gl.DrawTexturedQuad(canvas_tex, px, py, cw, ch);
     }
 
     // Artboard 32px blueprint grid (adapts dark/light contrast)
@@ -7030,10 +6946,10 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
         uint8_t ga = (lum > 140.0f) ? 24 : 11;
         float step = std::max(14.0f, 32.0f * (impl_->zoom < 0.7f ? 1.0f : impl_->zoom));
         for (float gx = px + step; gx < px + cw; gx += step) {
-            dx.DrawRectFilled(ctx, gx, py, 1.0f, ch, gr, gr, gr, ga);
+            gl.DrawRectFilled(gx, py, 1.0f, ch, gr, gr, gr, ga);
         }
         for (float gy = py + step; gy < py + ch; gy += step) {
-            dx.DrawRectFilled(ctx, px, gy, cw, 1.0f, gr, gr, gr, ga);
+            gl.DrawRectFilled(px, gy, cw, 1.0f, gr, gr, gr, ga);
         }
     }
 
@@ -7064,10 +6980,10 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
                     float col_w = avail / (float)cnt;
                     for (int i = 0; i < cnt; ++i) {
                         float x0 = nx + margin + (float)i * (col_w + gutter);
-                        dx.DrawRectFilled(ctx, x0, ny, col_w, nh, cr, cg, cb, ca);
+                        gl.DrawRectFilled(x0, ny, col_w, nh, cr, cg, cb, ca);
                         if (col_w >= 4.0f) {
-                            dx.DrawRectFilled(ctx, x0, ny, 1.0f, nh, cr, cg, cb, edge_a);
-                            dx.DrawRectFilled(ctx, x0 + col_w - 1.0f, ny, 1.0f, nh, cr, cg, cb, edge_a);
+                            gl.DrawRectFilled(x0, ny, 1.0f, nh, cr, cg, cb, edge_a);
+                            gl.DrawRectFilled(x0 + col_w - 1.0f, ny, 1.0f, nh, cr, cg, cb, edge_a);
                         }
                     }
                 }
@@ -7080,10 +6996,10 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
                     float row_h = avail / (float)cnt;
                     for (int i = 0; i < cnt; ++i) {
                         float y0 = ny + margin + (float)i * (row_h + gutter);
-                        dx.DrawRectFilled(ctx, nx, y0, nw, row_h, cr, cg, cb, ca);
+                        gl.DrawRectFilled(nx, y0, nw, row_h, cr, cg, cb, ca);
                         if (row_h >= 4.0f) {
-                            dx.DrawRectFilled(ctx, nx, y0, nw, 1.0f, cr, cg, cb, edge_a);
-                            dx.DrawRectFilled(ctx, nx, y0 + row_h - 1.0f, nw, 1.0f, cr, cg, cb, edge_a);
+                            gl.DrawRectFilled(nx, y0, nw, 1.0f, cr, cg, cb, edge_a);
+                            gl.DrawRectFilled(nx, y0 + row_h - 1.0f, nw, 1.0f, cr, cg, cb, edge_a);
                         }
                     }
                 }
@@ -7092,11 +7008,11 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
                 uint8_t line_a = (uint8_t)std::min(220, (int)ca * 2);
                 int guard = 0;
                 for (float gx = nx + step; gx < nx + nw && guard < 256; gx += step, ++guard) {
-                    dx.DrawRectFilled(ctx, gx, ny, 1.0f, nh, cr, cg, cb, line_a);
+                    gl.DrawRectFilled(gx, ny, 1.0f, nh, cr, cg, cb, line_a);
                 }
                 guard = 0;
                 for (float gy = ny + step; gy < ny + nh && guard < 256; gy += step, ++guard) {
-                    dx.DrawRectFilled(ctx, nx, gy, nw, 1.0f, cr, cg, cb, line_a);
+                    gl.DrawRectFilled(nx, gy, nw, 1.0f, cr, cg, cb, line_a);
                 }
             }
         }
@@ -7104,9 +7020,9 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
 
     // Artboard border
     if (const auto* root_node = impl_->doc->FindNode(impl_->doc->root_id); root_node && !impl_->doc->has_imported_source) {
-        dx.DrawRectOutline(ctx, px, py, cw, ch, 1.0f, root_node->border_color.r, root_node->border_color.g, root_node->border_color.b, root_node->border_color.a);
+        gl.DrawRectOutline(px, py, cw, ch, 1.0f, root_node->border_color.r, root_node->border_color.g, root_node->border_color.b, root_node->border_color.a);
     } else {
-        dx.DrawRectOutline(ctx, px - 1.0f, py - 1.0f, cw + 2.0f, ch + 2.0f, 1.0f, 59, 130, 246, 120);
+        gl.DrawRectOutline(px - 1.0f, py - 1.0f, cw + 2.0f, ch + 2.0f, 1.0f, 59, 130, 246, 120);
     }
 
     // Dashed Safe Area outline
@@ -7114,7 +7030,7 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
     if (impl_->safe_area || is_empty_artboard) {
         float inset = is_empty_artboard ? 14.0f : std::min(cw, ch) * 0.04f;
         if (cw > inset * 2.0f + 16.0f && ch > inset * 2.0f + 16.0f) {
-            dx.DrawDashedRectOutline(ctx, px + inset, py + inset, cw - inset * 2.0f, ch - inset * 2.0f, 1.0f, 5.0f, 4.0f, 71, 120, 245, 75);
+            gl.DrawDashedRectOutline(px + inset, py + inset, cw - inset * 2.0f, ch - inset * 2.0f, 1.0f, 5.0f, 4.0f, 71, 120, 245, 75);
         }
     }
 
@@ -7125,11 +7041,11 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
             if (const auto* sel = impl_->doc->FindNode(sid)) {
                 if (sel->id == impl_->doc->root_id) {
                     // Artboard subtle selection corners like .selection-outline:before/:after
-                    dx.DrawRectOutline(ctx, px, py, cw, ch, 1.0f, 71, 120, 245, 110);
-                    dx.DrawRectFilled(ctx, px - 3.0f, py - 3.0f, 6.0f, 6.0f, 71, 120, 245, 255);
-                    dx.DrawRectOutline(ctx, px - 3.0f, py - 3.0f, 6.0f, 6.0f, 1.0f, 168, 190, 255, 255);
-                    dx.DrawRectFilled(ctx, px + cw - 3.0f, py + ch - 3.0f, 6.0f, 6.0f, 71, 120, 245, 255);
-                    dx.DrawRectOutline(ctx, px + cw - 3.0f, py + ch - 3.0f, 6.0f, 6.0f, 1.0f, 168, 190, 255, 255);
+                    gl.DrawRectOutline(px, py, cw, ch, 1.0f, 71, 120, 245, 110);
+                    gl.DrawRectFilled(px - 3.0f, py - 3.0f, 6.0f, 6.0f, 71, 120, 245, 255);
+                    gl.DrawRectOutline(px - 3.0f, py - 3.0f, 6.0f, 6.0f, 1.0f, 168, 190, 255, 255);
+                    gl.DrawRectFilled(px + cw - 3.0f, py + ch - 3.0f, 6.0f, 6.0f, 71, 120, 245, 255);
+                    gl.DrawRectOutline(px + cw - 3.0f, py + ch - 3.0f, 6.0f, 6.0f, 1.0f, 168, 190, 255, 255);
                     continue;
                 }
                 float wx = 0.0f, wy = 0.0f, ww = sel->width, wh = sel->height;
@@ -7143,7 +7059,7 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
                 float sw = ww * impl_->zoom;
                 float sh = wh * impl_->zoom;
 
-                dx.DrawRectOutline(ctx, sx, sy, sw, sh, (sid == primary) ? 1.5f : 1.0f, 71, 120, 245, 255);
+                gl.DrawRectOutline(sx, sy, sw, sh, (sid == primary) ? 1.5f : 1.0f, 71, 120, 245, 255);
                 if (impl_->selected_ids.size() == 1 && !sel->locked) {
                     float xm = sx + sw * 0.5f;
                     float ym = sy + sh * 0.5f;
@@ -7152,8 +7068,8 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
                         {sx + sw, sy + sh}, {xm, sy + sh}, {sx, sy + sh}, {sx, ym}
                     };
                     for (int i = 0; i < 8; ++i) {
-                        dx.DrawRectFilled(ctx, pts[i][0] - 4.0f, pts[i][1] - 4.0f, 8.0f, 8.0f, 168, 190, 255, 255);
-                        dx.DrawRectOutline(ctx, pts[i][0] - 4.0f, pts[i][1] - 4.0f, 8.0f, 8.0f, 1.2f, 71, 120, 245, 255);
+                        gl.DrawRectFilled(pts[i][0] - 4.0f, pts[i][1] - 4.0f, 8.0f, 8.0f, 168, 190, 255, 255);
+                        gl.DrawRectOutline(pts[i][0] - 4.0f, pts[i][1] - 4.0f, 8.0f, 8.0f, 1.2f, 71, 120, 245, 255);
                     }
                 }
             }
@@ -7166,24 +7082,24 @@ void StudioUI::UpdateAndRender(Dx11Renderer2D& dx, ID3D11Device* device, ID3D11D
                     float gx = px + g.coord * impl_->zoom;
                     float gy0 = py + g.span_min * impl_->zoom - 6.0f;
                     float gy1 = py + g.span_max * impl_->zoom + 6.0f;
-                    dx.DrawRectFilled(ctx, gx, gy0, 1.0f, std::max(2.0f, gy1 - gy0), 255, 46, 147, 235);
-                    dx.DrawRectFilled(ctx, gx - 2.5f, gy0, 6.0f, 1.0f, 255, 46, 147, 235);
-                    dx.DrawRectFilled(ctx, gx - 2.5f, gy1 - 1.0f, 6.0f, 1.0f, 255, 46, 147, 235);
+                    gl.DrawRectFilled(gx, gy0, 1.0f, std::max(2.0f, gy1 - gy0), 255, 46, 147, 235);
+                    gl.DrawRectFilled(gx - 2.5f, gy0, 6.0f, 1.0f, 255, 46, 147, 235);
+                    gl.DrawRectFilled(gx - 2.5f, gy1 - 1.0f, 6.0f, 1.0f, 255, 46, 147, 235);
                 } else {
                     float gy = py + g.coord * impl_->zoom;
                     float gx0 = px + g.span_min * impl_->zoom - 6.0f;
                     float gx1 = px + g.span_max * impl_->zoom + 6.0f;
-                    dx.DrawRectFilled(ctx, gx0, gy, std::max(2.0f, gx1 - gx0), 1.0f, 255, 46, 147, 235);
-                    dx.DrawRectFilled(ctx, gx0, gy - 2.5f, 1.0f, 6.0f, 255, 46, 147, 235);
-                    dx.DrawRectFilled(ctx, gx1 - 1.0f, gy - 2.5f, 1.0f, 6.0f, 255, 46, 147, 235);
+                    gl.DrawRectFilled(gx0, gy, std::max(2.0f, gx1 - gx0), 1.0f, 255, 46, 147, 235);
+                    gl.DrawRectFilled(gx0, gy - 2.5f, 1.0f, 6.0f, 255, 46, 147, 235);
+                    gl.DrawRectFilled(gx1 - 1.0f, gy - 2.5f, 1.0f, 6.0f, 255, 46, 147, 235);
                 }
             }
         }
     }
 
-    dx.ClearScissor(ctx);
+    gl.ClearScissor();
 
-    impl_->engine->RenderEditor(device, ctx);
+    impl_->engine->RenderEditor();
 }
 
 void StudioUI::SetStatus(const std::string& msg) {

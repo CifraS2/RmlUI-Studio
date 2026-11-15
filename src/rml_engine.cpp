@@ -1,4 +1,4 @@
-#include "rml_engine.h"
+﻿#include "rml_engine.h"
 #include "studio_icons.h"
 
 #include <RmlUi/Core.h>
@@ -12,18 +12,22 @@
 #include <RmlUi/Core/RenderInterface.h>
 #include <RmlUi/Core/SystemInterface.h>
 
-#include <DirectXMath.h>
-#include <d3dcompiler.h>
-#include <wincodec.h>
+#include "../third_party/RmlUi/Backends/RmlUi_Platform_GLFW.h"
+#include "../third_party/RmlUi/Backends/RmlUi_Renderer_GL3.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "../third_party/stb/stb_image.h"
 
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <memory>
 #include <sstream>
 #include <unordered_map>
 
@@ -43,46 +47,27 @@ std::string normalize_vpath(const Rml::String& path) {
     return s;
 }
 
-bool decode_image_wic(const uint8_t* bytes, size_t len, int& out_w, int& out_h, std::vector<uint8_t>& out_premul_rgba) {
+bool decode_image_stb(const uint8_t* bytes, size_t len, int& out_w, int& out_h, std::vector<uint8_t>& out_premul_rgba) {
     if (!bytes || len == 0) return false;
-    IWICImagingFactory* factory = nullptr;
-    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
-    if (FAILED(hr) || !factory) return false;
-
-    IWICStream* stream = nullptr;
-    hr = factory->CreateStream(&stream);
-    if (FAILED(hr) || !stream) { factory->Release(); return false; }
-    hr = stream->InitializeFromMemory(const_cast<BYTE*>(bytes), static_cast<DWORD>(len));
-    if (FAILED(hr)) { stream->Release(); factory->Release(); return false; }
-
-    IWICBitmapDecoder* decoder = nullptr;
-    hr = factory->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnDemand, &decoder);
-    if (FAILED(hr) || !decoder) { stream->Release(); factory->Release(); return false; }
-
-    IWICBitmapFrameDecode* frame = nullptr;
-    hr = decoder->GetFrame(0, &frame);
-    if (FAILED(hr) || !frame) { decoder->Release(); stream->Release(); factory->Release(); return false; }
-
-    UINT w = 0, h = 0;
-    frame->GetSize(&w, &h);
-    IWICFormatConverter* conv = nullptr;
-    hr = factory->CreateFormatConverter(&conv);
-    if (FAILED(hr) || !conv) { frame->Release(); decoder->Release(); stream->Release(); factory->Release(); return false; }
-
-    hr = conv->Initialize(frame, GUID_WICPixelFormat32bppPRGBA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
-    if (SUCCEEDED(hr) && w > 0 && h > 0) {
-        out_w = static_cast<int>(w);
-        out_h = static_cast<int>(h);
-        out_premul_rgba.resize(static_cast<size_t>(w) * static_cast<size_t>(h) * 4u);
-        hr = conv->CopyPixels(nullptr, w * 4u, static_cast<UINT>(out_premul_rgba.size()), out_premul_rgba.data());
+    int w = 0, h = 0, ch = 0;
+    stbi_uc* pixels = stbi_load_from_memory(bytes, static_cast<int>(len), &w, &h, &ch, 4);
+    if (!pixels || w <= 0 || h <= 0) {
+        if (pixels) stbi_image_free(pixels);
+        return false;
     }
-
-    conv->Release();
-    frame->Release();
-    decoder->Release();
-    stream->Release();
-    factory->Release();
-    return SUCCEEDED(hr);
+    const size_t nbytes = static_cast<size_t>(w) * static_cast<size_t>(h) * 4u;
+    out_premul_rgba.resize(nbytes);
+    for (size_t i = 0; i < nbytes; i += 4u) {
+        uint32_t a = pixels[i + 3];
+        out_premul_rgba[i + 0] = static_cast<uint8_t>((static_cast<uint32_t>(pixels[i + 0]) * a + 127u) / 255u);
+        out_premul_rgba[i + 1] = static_cast<uint8_t>((static_cast<uint32_t>(pixels[i + 1]) * a + 127u) / 255u);
+        out_premul_rgba[i + 2] = static_cast<uint8_t>((static_cast<uint32_t>(pixels[i + 2]) * a + 127u) / 255u);
+        out_premul_rgba[i + 3] = static_cast<uint8_t>(a);
+    }
+    stbi_image_free(pixels);
+    out_w = w;
+    out_h = h;
+    return true;
 }
 
 struct OpenFile {
@@ -91,14 +76,11 @@ struct OpenFile {
     size_t pos = 0;
 };
 
-class StudioSystemInterface final : public Rml::SystemInterface {
+class StudioSystemInterface final : public SystemInterface_GLFW {
 public:
-    StudioSystemInterface() : start_(std::chrono::steady_clock::now()) {}
+    explicit StudioSystemInterface(GLFWwindow* window) : SystemInterface_GLFW(window) {}
     int xml_error_count = 0;
 
-    double GetElapsedTime() override {
-        return std::chrono::duration<double>(std::chrono::steady_clock::now() - start_).count();
-    }
     bool LogMessage(Rml::Log::Type type, const Rml::String& message) override {
         if (type == Rml::Log::LT_ERROR) {
             if (message.find("XML") != Rml::String::npos || message.find("Failed to load") != Rml::String::npos) {
@@ -106,48 +88,10 @@ public:
             }
         }
         if (type == Rml::Log::LT_ERROR || type == Rml::Log::LT_WARNING || type == Rml::Log::LT_ASSERT) {
-            std::fprintf(stderr, "[Rml:%d] %s\n", (int)type, message.c_str());
+            std::fprintf(stderr, "[Rml:%d] %s\n", static_cast<int>(type), message.c_str());
         }
         return true;
     }
-    void SetClipboardText(const Rml::String& text) override {
-        if (!OpenClipboard(nullptr)) return;
-        EmptyClipboard();
-        if (!text.empty()) {
-            int len = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0);
-            if (len > 0) {
-                HGLOBAL hmem = GlobalAlloc(GMEM_MOVEABLE, static_cast<size_t>(len + 1) * sizeof(wchar_t));
-                if (hmem) {
-                    if (auto* ptr = static_cast<wchar_t*>(GlobalLock(hmem))) {
-                        MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), ptr, len);
-                        ptr[len] = L'\0';
-                        GlobalUnlock(hmem);
-                        SetClipboardData(CF_UNICODETEXT, hmem);
-                    } else {
-                        GlobalFree(hmem);
-                    }
-                }
-            }
-        }
-        CloseClipboard();
-    }
-    void GetClipboardText(Rml::String& text) override {
-        text.clear();
-        if (!OpenClipboard(nullptr)) return;
-        if (HANDLE hdata = GetClipboardData(CF_UNICODETEXT)) {
-            if (const auto* wptr = static_cast<const wchar_t*>(GlobalLock(hdata))) {
-                int bytes = WideCharToMultiByte(CP_UTF8, 0, wptr, -1, nullptr, 0, nullptr, nullptr);
-                if (bytes > 1) {
-                    text.resize(static_cast<size_t>(bytes - 1));
-                    WideCharToMultiByte(CP_UTF8, 0, wptr, -1, text.data(), bytes, nullptr, nullptr);
-                }
-                GlobalUnlock(hdata);
-            }
-        }
-        CloseClipboard();
-    }
-private:
-    std::chrono::steady_clock::time_point start_;
 };
 
 class StudioFileInterface final : public Rml::FileInterface {
@@ -214,287 +158,9 @@ public:
     }
 };
 
-struct GpuGeometry {
-    ID3D11Buffer* vb = nullptr;
-    ID3D11Buffer* ib = nullptr;
-    UINT index_count = 0;
-};
-
-struct GpuTexture {
-    ID3D11Texture2D* tex = nullptr;
-    ID3D11ShaderResourceView* srv = nullptr;
-    int width = 0;
-    int height = 0;
-};
-
-struct alignas(16) RmlCB {
-    float mvp[16];
-    float translation[2];
-    float has_tex;
-    float pad;
-};
-
-const char* kRmlHlsl = R"HLSL(
-cbuffer CB : register(b0) {
-    row_major float4x4 mvp;
-    float2 translation;
-    float has_tex;
-    float pad;
-};
-
-struct VSIn {
-    float2 pos : POSITION;
-    float4 col : COLOR;
-    float2 uv  : TEXCOORD;
-};
-
-struct PSIn {
-    float4 pos : SV_POSITION;
-    float4 col : COLOR;
-    float2 uv  : TEXCOORD;
-};
-
-PSIn VSMain(VSIn i) {
-    PSIn o;
-    float2 p = i.pos + translation;
-    o.pos = mul(mvp, float4(p, 0.0, 1.0));
-    o.col = i.col;
-    o.uv = i.uv;
-    return o;
-}
-
-Texture2D tex0 : register(t0);
-SamplerState samp0 : register(s0);
-
-float4 PSMain(PSIn i) : SV_TARGET {
-    if (has_tex > 0.5) {
-        return tex0.Sample(samp0, i.uv) * i.col;
-    }
-    return i.col;
-}
-)HLSL";
-
-class Dx11RmlRenderInterface final : public Rml::RenderInterface {
+class StudioGl3RenderInterface final : public RenderInterface_GL3 {
 public:
     StudioFileInterface* file_iface = nullptr;
-    ID3D11Device* device = nullptr;
-    ID3D11DeviceContext* ctx = nullptr;
-
-    int vp_w = 1440;
-    int vp_h = 860;
-
-    ID3D11VertexShader* vs = nullptr;
-    ID3D11PixelShader* ps = nullptr;
-    ID3D11InputLayout* layout = nullptr;
-    ID3D11Buffer* cb = nullptr;
-    ID3D11BlendState* blend = nullptr;
-    ID3D11RasterizerState* rast = nullptr;
-    ID3D11DepthStencilState* depth = nullptr;
-    ID3D11SamplerState* sampler = nullptr;
-
-    bool scissor_enabled = false;
-    Rml::Rectanglei scissor_rect = Rml::Rectanglei::MakeInvalid();
-    bool has_transform = false;
-    Rml::Matrix4f transform = Rml::Matrix4f::Identity();
-    DirectX::XMMATRIX ortho = DirectX::XMMatrixIdentity();
-
-    bool Init(ID3D11Device* dev, ID3D11DeviceContext* dc) {
-        static_assert(sizeof(Rml::Vertex) == 20, "Rml::Vertex must be 20 bytes");
-        device = dev;
-        ctx = dc;
-        if (!device || !ctx) return false;
-
-        ID3DBlob* vs_blob = nullptr;
-        ID3DBlob* ps_blob = nullptr;
-        ID3DBlob* err_blob = nullptr;
-        if (FAILED(D3DCompile(kRmlHlsl, std::strlen(kRmlHlsl), nullptr, nullptr, nullptr, "VSMain", "vs_4_0", 0, 0, &vs_blob, &err_blob))) {
-            if (err_blob) err_blob->Release();
-            return false;
-        }
-        if (FAILED(D3DCompile(kRmlHlsl, std::strlen(kRmlHlsl), nullptr, nullptr, nullptr, "PSMain", "ps_4_0", 0, 0, &ps_blob, &err_blob))) {
-            vs_blob->Release();
-            if (err_blob) err_blob->Release();
-            return false;
-        }
-        device->CreateVertexShader(vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), nullptr, &vs);
-        device->CreatePixelShader(ps_blob->GetBufferPointer(), ps_blob->GetBufferSize(), nullptr, &ps);
-
-        D3D11_INPUT_ELEMENT_DESC ied[3] = {
-            {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT,   0, 0,  D3D11_INPUT_PER_VERTEX_DATA, 0},
-            {"COLOR",    0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 8,  D3D11_INPUT_PER_VERTEX_DATA, 0},
-            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,   0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        };
-        device->CreateInputLayout(ied, 3, vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), &layout);
-        vs_blob->Release();
-        ps_blob->Release();
-
-        D3D11_BUFFER_DESC cbd{};
-        cbd.ByteWidth = sizeof(RmlCB);
-        cbd.Usage = D3D11_USAGE_DYNAMIC;
-        cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        device->CreateBuffer(&cbd, nullptr, &cb);
-
-        D3D11_BLEND_DESC bd{};
-        bd.RenderTarget[0].BlendEnable = TRUE;
-        bd.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
-        bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
-        bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
-        bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-        bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
-        bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-        bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-        device->CreateBlendState(&bd, &blend);
-
-        D3D11_RASTERIZER_DESC rd{};
-        rd.FillMode = D3D11_FILL_SOLID;
-        rd.CullMode = D3D11_CULL_NONE;
-        rd.ScissorEnable = TRUE;
-        rd.DepthClipEnable = TRUE;
-        device->CreateRasterizerState(&rd, &rast);
-
-        D3D11_DEPTH_STENCIL_DESC dsd{};
-        dsd.DepthEnable = FALSE;
-        device->CreateDepthStencilState(&dsd, &depth);
-
-        D3D11_SAMPLER_DESC sd{};
-        sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-        sd.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-        sd.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-        sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-        device->CreateSamplerState(&sd, &sampler);
-
-        SetViewport(vp_w, vp_h);
-        return vs && ps && layout && cb && blend && rast && depth && sampler;
-    }
-
-    void Shutdown() {
-        if (sampler) { sampler->Release(); sampler = nullptr; }
-        if (depth) { depth->Release(); depth = nullptr; }
-        if (rast) { rast->Release(); rast = nullptr; }
-        if (blend) { blend->Release(); blend = nullptr; }
-        if (cb) { cb->Release(); cb = nullptr; }
-        if (layout) { layout->Release(); layout = nullptr; }
-        if (ps) { ps->Release(); ps = nullptr; }
-        if (vs) { vs->Release(); vs = nullptr; }
-    }
-
-    void SetViewport(int w, int h) {
-        vp_w = std::max(1, w);
-        vp_h = std::max(1, h);
-        ortho = DirectX::XMMatrixOrthographicOffCenterLH(0.0f, (float)vp_w, (float)vp_h, 0.0f, -1.0f, 1.0f);
-    }
-
-    void UpdateCB(Rml::Vector2f translation, bool has_tex) {
-        if (!ctx || !cb) return;
-        D3D11_MAPPED_SUBRESOURCE mapped{};
-        if (SUCCEEDED(ctx->Map(cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-            auto* data = reinterpret_cast<RmlCB*>(mapped.pData);
-            DirectX::XMMATRIX m = ortho;
-            if (has_transform) {
-                Rml::Matrix4f t = transform.Transpose();
-                DirectX::XMMATRIX model(t.data());
-                m = DirectX::XMMatrixMultiply(model, ortho);
-            }
-            DirectX::XMMATRIX mvp_t = DirectX::XMMatrixTranspose(m);
-            DirectX::XMStoreFloat4x4(reinterpret_cast<DirectX::XMFLOAT4X4*>(data->mvp), mvp_t);
-            data->translation[0] = translation.x;
-            data->translation[1] = translation.y;
-            data->has_tex = has_tex ? 1.0f : 0.0f;
-            data->pad = 0.0f;
-            ctx->Unmap(cb, 0);
-        }
-    }
-
-    void BeginPass() {
-        if (!ctx) return;
-        has_transform = false;
-        scissor_enabled = false;
-        D3D11_VIEWPORT vp{0.0f, 0.0f, (float)vp_w, (float)vp_h, 0.0f, 1.0f};
-        ctx->RSSetViewports(1, &vp);
-        ctx->IASetInputLayout(layout);
-        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        ctx->VSSetShader(vs, nullptr, 0);
-        ctx->PSSetShader(ps, nullptr, 0);
-        UpdateCB({0.0f, 0.0f}, false);
-        ctx->VSSetConstantBuffers(0, 1, &cb);
-        ctx->PSSetConstantBuffers(0, 1, &cb);
-        ctx->PSSetSamplers(0, 1, &sampler);
-        float bf[4] = {0, 0, 0, 0};
-        ctx->OMSetBlendState(blend, bf, 0xFFFFFFFF);
-        ctx->OMSetDepthStencilState(depth, 0);
-        ctx->RSSetState(rast);
-        ApplyScissor();
-    }
-
-    void ApplyScissor() {
-        if (!ctx) return;
-        D3D11_RECT r{0, 0, vp_w, vp_h};
-        if (scissor_enabled && scissor_rect.Valid()) {
-            r.left = std::clamp<int>(scissor_rect.Left(), 0, vp_w);
-            r.top = std::clamp<int>(scissor_rect.Top(), 0, vp_h);
-            r.right = std::clamp<int>(scissor_rect.Right(), (int)r.left, vp_w);
-            r.bottom = std::clamp<int>(scissor_rect.Bottom(), (int)r.top, vp_h);
-        }
-        ctx->RSSetScissorRects(1, &r);
-    }
-
-    Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) override {
-        if (!device || vertices.empty() || indices.empty()) return 0;
-        auto* geom = new GpuGeometry();
-        geom->index_count = (UINT)indices.size();
-
-        D3D11_BUFFER_DESC vbd{};
-        vbd.ByteWidth = (UINT)(vertices.size() * sizeof(Rml::Vertex));
-        vbd.Usage = D3D11_USAGE_IMMUTABLE;
-        vbd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-        D3D11_SUBRESOURCE_DATA vsd{vertices.data(), 0, 0};
-        if (FAILED(device->CreateBuffer(&vbd, &vsd, &geom->vb))) {
-            delete geom;
-            return 0;
-        }
-
-        D3D11_BUFFER_DESC ibd{};
-        ibd.ByteWidth = (UINT)(indices.size() * sizeof(int));
-        ibd.Usage = D3D11_USAGE_IMMUTABLE;
-        ibd.BindFlags = D3D11_BIND_INDEX_BUFFER;
-        D3D11_SUBRESOURCE_DATA isd{indices.data(), 0, 0};
-        if (FAILED(device->CreateBuffer(&ibd, &isd, &geom->ib))) {
-            geom->vb->Release();
-            delete geom;
-            return 0;
-        }
-        return reinterpret_cast<Rml::CompiledGeometryHandle>(geom);
-    }
-
-    void RenderGeometry(Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation, Rml::TextureHandle texture) override {
-        auto* geom = reinterpret_cast<GpuGeometry*>(geometry);
-        if (!ctx || !geom || !geom->vb || !geom->ib) return;
-
-        UpdateCB(translation, texture != 0);
-        ctx->VSSetConstantBuffers(0, 1, &cb);
-        ctx->PSSetConstantBuffers(0, 1, &cb);
-
-        ID3D11ShaderResourceView* srv = nullptr;
-        if (texture) {
-            srv = reinterpret_cast<GpuTexture*>(texture)->srv;
-        }
-        ctx->PSSetShaderResources(0, 1, &srv);
-
-        UINT stride = sizeof(Rml::Vertex);
-        UINT offset = 0;
-        ctx->IASetVertexBuffers(0, 1, &geom->vb, &stride, &offset);
-        ctx->IASetIndexBuffer(geom->ib, DXGI_FORMAT_R32_UINT, 0);
-        ctx->DrawIndexed(geom->index_count, 0, 0);
-    }
-
-    void ReleaseGeometry(Rml::CompiledGeometryHandle geometry) override {
-        auto* geom = reinterpret_cast<GpuGeometry*>(geometry);
-        if (!geom) return;
-        if (geom->vb) geom->vb->Release();
-        if (geom->ib) geom->ib->Release();
-        delete geom;
-    }
 
     Rml::TextureHandle LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) override {
         auto ico_pos = source.rfind("studio_ico_");
@@ -509,15 +175,15 @@ public:
         }
         if (source == "studio_cp_hue") {
             const int w = 24, h = 256;
-            std::vector<uint8_t> rgba((size_t)w * (size_t)h * 4u, 255);
+            std::vector<uint8_t> rgba(static_cast<size_t>(w) * static_cast<size_t>(h) * 4u, 255);
             for (int y = 0; y < h; ++y) {
-                float hue = 360.0f * (1.0f - (float)y / (float)(h - 1));
+                float hue = 360.0f * (1.0f - static_cast<float>(y) / static_cast<float>(h - 1));
                 if (hue >= 360.0f) hue = 0.0f;
                 float sec = hue / 60.0f;
-                int idx = (int)std::floor(sec) % 6;
+                int idx = static_cast<int>(std::floor(sec)) % 6;
                 float f = sec - std::floor(sec);
-                uint8_t up = (uint8_t)std::clamp((int)std::round(f * 255.0f), 0, 255);
-                uint8_t dn = (uint8_t)std::clamp((int)std::round((1.0f - f) * 255.0f), 0, 255);
+                uint8_t up = static_cast<uint8_t>(std::clamp(static_cast<int>(std::round(f * 255.0f)), 0, 255));
+                uint8_t dn = static_cast<uint8_t>(std::clamp(static_cast<int>(std::round((1.0f - f) * 255.0f)), 0, 255));
                 uint8_t r = 255, g = 0, b = 0;
                 switch (idx) {
                     case 0: r = 255; g = up;  b = 0;   break;
@@ -528,8 +194,8 @@ public:
                     default: r = 255; g = 0;  b = dn;  break;
                 }
                 for (int x = 0; x < w; ++x) {
-                    size_t p = ((size_t)y * (size_t)w + (size_t)x) * 4u;
-                    rgba[p + 0] = r; rgba[p + 1] = g; rgba[p + 2] = b; rgba[p + 3] = 255;
+                    size_t pos = (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u;
+                    rgba[pos + 0] = r; rgba[pos + 1] = g; rgba[pos + 2] = b; rgba[pos + 3] = 255;
                 }
             }
             texture_dimensions = {w, h};
@@ -537,12 +203,12 @@ public:
         }
         if (source == "studio_cp_sv_white") {
             const int w = 256, h = 2;
-            std::vector<uint8_t> rgba((size_t)w * (size_t)h * 4u, 0);
+            std::vector<uint8_t> rgba(static_cast<size_t>(w) * static_cast<size_t>(h) * 4u, 0);
             for (int y = 0; y < h; ++y) {
                 for (int x = 0; x < w; ++x) {
-                    uint8_t a = (uint8_t)(255 - x);
-                    size_t p = ((size_t)y * (size_t)w + (size_t)x) * 4u;
-                    rgba[p + 0] = a; rgba[p + 1] = a; rgba[p + 2] = a; rgba[p + 3] = a;
+                    uint8_t a = static_cast<uint8_t>(255 - x);
+                    size_t pos = (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u;
+                    rgba[pos + 0] = a; rgba[pos + 1] = a; rgba[pos + 2] = a; rgba[pos + 3] = a;
                 }
             }
             texture_dimensions = {w, h};
@@ -550,12 +216,12 @@ public:
         }
         if (source == "studio_cp_sv_black") {
             const int w = 2, h = 256;
-            std::vector<uint8_t> rgba((size_t)w * (size_t)h * 4u, 0);
+            std::vector<uint8_t> rgba(static_cast<size_t>(w) * static_cast<size_t>(h) * 4u, 0);
             for (int y = 0; y < h; ++y) {
-                uint8_t a = (uint8_t)y;
+                uint8_t a = static_cast<uint8_t>(y);
                 for (int x = 0; x < w; ++x) {
-                    size_t p = ((size_t)y * (size_t)w + (size_t)x) * 4u;
-                    rgba[p + 0] = 0; rgba[p + 1] = 0; rgba[p + 2] = 0; rgba[p + 3] = a;
+                    size_t pos = (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u;
+                    rgba[pos + 0] = 0; rgba[pos + 1] = 0; rgba[pos + 2] = 0; rgba[pos + 3] = a;
                 }
             }
             texture_dimensions = {w, h};
@@ -563,13 +229,13 @@ public:
         }
         if (source == "studio_cp_checker") {
             const int w = 16, h = 16;
-            std::vector<uint8_t> rgba((size_t)w * (size_t)h * 4u, 255);
+            std::vector<uint8_t> rgba(static_cast<size_t>(w) * static_cast<size_t>(h) * 4u, 255);
             for (int y = 0; y < h; ++y) {
                 for (int x = 0; x < w; ++x) {
                     bool light = (((x / 4) + (y / 4)) & 1) == 0;
                     uint8_t c = light ? 96 : 56;
-                    size_t p = ((size_t)y * (size_t)w + (size_t)x) * 4u;
-                    rgba[p + 0] = c; rgba[p + 1] = c; rgba[p + 2] = c; rgba[p + 3] = 255;
+                    size_t pos = (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u;
+                    rgba[pos + 0] = c; rgba[pos + 1] = c; rgba[pos + 2] = c; rgba[pos + 3] = 255;
                 }
             }
             texture_dimensions = {w, h};
@@ -585,70 +251,11 @@ public:
 
         int w = 0, h = 0;
         std::vector<uint8_t> rgba;
-        if (!decode_image_wic(raw.data(), raw.size(), w, h, rgba)) return 0;
+        if (!decode_image_stb(raw.data(), raw.size(), w, h, rgba)) return 0;
         texture_dimensions = {w, h};
         return GenerateTexture(Rml::Span<const Rml::byte>(rgba.data(), rgba.size()), {w, h});
     }
-
-    Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i source_dimensions) override {
-        if (!device || source_dimensions.x <= 0 || source_dimensions.y <= 0) return 0;
-        D3D11_TEXTURE2D_DESC td{};
-        td.Width = (UINT)source_dimensions.x;
-        td.Height = (UINT)source_dimensions.y;
-        td.MipLevels = 1;
-        td.ArraySize = 1;
-        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        td.SampleDesc.Count = 1;
-        td.Usage = D3D11_USAGE_IMMUTABLE;
-        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-        D3D11_SUBRESOURCE_DATA sd{source.data(), (UINT)(source_dimensions.x * 4), 0};
-        ID3D11Texture2D* tex = nullptr;
-        if (FAILED(device->CreateTexture2D(&td, &sd, &tex)) || !tex) return 0;
-
-        ID3D11ShaderResourceView* srv = nullptr;
-        if (FAILED(device->CreateShaderResourceView(tex, nullptr, &srv)) || !srv) {
-            tex->Release();
-            return 0;
-        }
-
-        auto* gt = new GpuTexture();
-        gt->tex = tex;
-        gt->srv = srv;
-        gt->width = source_dimensions.x;
-        gt->height = source_dimensions.y;
-        return reinterpret_cast<Rml::TextureHandle>(gt);
-    }
-
-    void ReleaseTexture(Rml::TextureHandle texture) override {
-        auto* gt = reinterpret_cast<GpuTexture*>(texture);
-        if (!gt) return;
-        if (gt->srv) gt->srv->Release();
-        if (gt->tex) gt->tex->Release();
-        delete gt;
-    }
-
-    void EnableScissorRegion(bool enable) override {
-        scissor_enabled = enable;
-        ApplyScissor();
-    }
-
-    void SetScissorRegion(Rml::Rectanglei region) override {
-        scissor_rect = region;
-        ApplyScissor();
-    }
-
-    void SetTransform(const Rml::Matrix4f* t) override {
-        if (t) {
-            has_transform = true;
-            transform = *t;
-        } else {
-            has_transform = false;
-            transform = Rml::Matrix4f::Identity();
-        }
-    }
 };
-
 } // namespace
 
 namespace {
@@ -693,14 +300,19 @@ public:
                 if (cand.empty()) continue;
                 if (auto h = inner_->GetFontFaceHandle(cand, style, weight, size)) return h;
                 if (cand == "monospace") {
-                    if (auto h = inner_->GetFontFaceHandle("consolas", style, weight, size)) return h;
+                    const char* mono_fallbacks[] = {"consolas", "dejavu sans mono", "liberation mono", "ubuntu mono", "noto sans mono"};
+                    for (const char* mf : mono_fallbacks) {
+                        if (auto h = inner_->GetFontFaceHandle(mf, style, weight, size)) return h;
+                    }
                 } else if (cand == "sans-serif" || cand == "system-ui") {
-                    if (auto h = inner_->GetFontFaceHandle("segoe ui", style, weight, size)) return h;
-                    if (auto h = inner_->GetFontFaceHandle("arial", style, weight, size)) return h;
+                    const char* sans_fallbacks[] = {"segoe ui", "arial", "dejavu sans", "liberation sans", "noto sans", "ubuntu"};
+                    for (const char* sf : sans_fallbacks) {
+                        if (auto h = inner_->GetFontFaceHandle(sf, style, weight, size)) return h;
+                    }
                 }
             }
         }
-        const char* defaults[] = {"segoe ui", "arial", "consolas"};
+        const char* defaults[] = {"segoe ui", "arial", "consolas", "dejavu sans", "liberation sans", "noto sans", "ubuntu", "dejavu sans mono"};
         for (const char* def : defaults) {
             if (auto h = inner_->GetFontFaceHandle(def, style, weight, size)) return h;
         }
@@ -734,9 +346,9 @@ private:
 } // namespace
 
 struct RmlEngineHost::Impl {
-    StudioSystemInterface sys;
+    std::unique_ptr<StudioSystemInterface> sys;
     StudioFileInterface file;
-    Dx11RmlRenderInterface render;
+    std::unique_ptr<StudioGl3RenderInterface> render;
     FallbackFontEngineInterface font_fallback;
 
     Rml::Context* canvas_ctx = nullptr;
@@ -744,9 +356,7 @@ struct RmlEngineHost::Impl {
     Rml::ElementDocument* canvas_doc = nullptr;
     Rml::ElementDocument* editor_doc = nullptr;
 
-    ID3D11Texture2D* canvas_rt = nullptr;
-    ID3D11RenderTargetView* canvas_rtv = nullptr;
-    ID3D11ShaderResourceView* canvas_srv = nullptr;
+    Rml::TextureHandle canvas_tex = 0;
     int canvas_w = 0;
     int canvas_h = 0;
 
@@ -755,57 +365,32 @@ struct RmlEngineHost::Impl {
     bool initialized = false;
 
     void ReleaseCanvasRT() {
-        if (canvas_srv) { canvas_srv->Release(); canvas_srv = nullptr; }
-        if (canvas_rtv) { canvas_rtv->Release(); canvas_rtv = nullptr; }
-        if (canvas_rt) { canvas_rt->Release(); canvas_rt = nullptr; }
+        if (canvas_tex && render) {
+            render->ReleaseTexture(canvas_tex);
+        }
+        canvas_tex = 0;
         canvas_w = 0;
         canvas_h = 0;
     }
 
-    bool EnsureCanvasRT(ID3D11Device* device, int w, int h) {
-        if (canvas_rt && canvas_w == w && canvas_h == h) return true;
+    void RenderCanvasToTexture(int w, int h) {
+        if (!render || !canvas_ctx) return;
         ReleaseCanvasRT();
-        D3D11_TEXTURE2D_DESC td{};
-        td.Width = (UINT)w;
-        td.Height = (UINT)h;
-        td.MipLevels = 1;
-        td.ArraySize = 1;
-        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        td.SampleDesc.Count = 1;
-        td.Usage = D3D11_USAGE_DEFAULT;
-        td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-        if (FAILED(device->CreateTexture2D(&td, nullptr, &canvas_rt)) || !canvas_rt) return false;
-        if (FAILED(device->CreateRenderTargetView(canvas_rt, nullptr, &canvas_rtv)) || !canvas_rtv) {
-            ReleaseCanvasRT();
-            return false;
-        }
-        if (FAILED(device->CreateShaderResourceView(canvas_rt, nullptr, &canvas_srv)) || !canvas_srv) {
-            ReleaseCanvasRT();
-            return false;
-        }
+        w = std::max(64, w);
+        h = std::max(64, h);
+
+        render->SetViewport(w, h);
+        render->BeginFrame();
+        render->EnableScissorRegion(true);
+        render->SetScissorRegion(Rml::Rectanglei::FromSize({w, h}));
+        canvas_ctx->Render();
+        render->EnableScissorRegion(true);
+        render->SetScissorRegion(Rml::Rectanglei::FromSize({w, h}));
+        canvas_tex = render->SaveLayerAsTexture();
+        render->EndFrame();
+
         canvas_w = w;
         canvas_h = h;
-        return true;
-    }
-
-    void RenderCanvasToTexture(ID3D11Device* device, ID3D11DeviceContext* ctx, int w, int h) {
-        if (!EnsureCanvasRT(device, w, h)) return;
-
-        ID3D11RenderTargetView* prev_rtv = nullptr;
-        ID3D11DepthStencilView* prev_dsv = nullptr;
-        ctx->OMGetRenderTargets(1, &prev_rtv, &prev_dsv);
-
-        const float clear_col[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-        ctx->OMSetRenderTargets(1, &canvas_rtv, nullptr);
-        ctx->ClearRenderTargetView(canvas_rtv, clear_col);
-
-        render.SetViewport(w, h);
-        render.BeginPass();
-        canvas_ctx->Render();
-
-        ctx->OMSetRenderTargets(1, &prev_rtv, prev_dsv);
-        if (prev_rtv) prev_rtv->Release();
-        if (prev_dsv) prev_dsv->Release();
     }
 };
 
@@ -816,21 +401,37 @@ RmlEngineHost::~RmlEngineHost() {
     impl_ = nullptr;
 }
 
-bool RmlEngineHost::Init(ID3D11Device* device, ID3D11DeviceContext* ctx) {
+bool RmlEngineHost::Init(GLFWwindow* window) {
     if (impl_->initialized) return true;
-    impl_->render.file_iface = &impl_->file;
-    if (!impl_->render.Init(device, ctx)) return false;
+    Rml::String gl_msg;
+    if (!RmlGL3::Initialize(&gl_msg)) {
+        std::fprintf(stderr, "[RmlGL3] %s\n", gl_msg.c_str());
+        return false;
+    }
 
-    Rml::SetSystemInterface(&impl_->sys);
+    impl_->sys = std::make_unique<StudioSystemInterface>(window);
+    impl_->render = std::make_unique<StudioGl3RenderInterface>();
+    if (!(*impl_->render)) {
+        impl_->render.reset();
+        impl_->sys.reset();
+        RmlGL3::Shutdown();
+        return false;
+    }
+    impl_->render->file_iface = &impl_->file;
+
+    Rml::SetSystemInterface(impl_->sys.get());
     Rml::SetFileInterface(&impl_->file);
-    Rml::SetRenderInterface(&impl_->render);
+    Rml::SetRenderInterface(impl_->render.get());
     if (!Rml::Initialise()) {
-        impl_->render.Shutdown();
+        impl_->render.reset();
+        impl_->sys.reset();
+        RmlGL3::Shutdown();
         return false;
     }
     impl_->font_fallback.SetInner(Rml::GetFontEngineInterface());
     Rml::SetFontEngineInterface(&impl_->font_fallback);
 
+#ifdef _WIN32
     if (fs::exists(R"(C:\Windows\Fonts\segoeui.ttf)")) {
         Rml::LoadFontFace(R"(C:\Windows\Fonts\segoeui.ttf)", true);
     }
@@ -847,13 +448,48 @@ bool RmlEngineHost::Init(ID3D11Device* device, ID3D11DeviceContext* ctx) {
             Rml::LoadFontFace(fp, false);
         }
     }
+#else
+    const char* linux_fallback_fonts[] = {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+    };
+    for (const char* fp : linux_fallback_fonts) {
+        if (fs::exists(fp)) {
+            Rml::LoadFontFace(fp, true);
+            break;
+        }
+    }
+    const char* linux_extra_fonts[] = {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
+        "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    };
+    for (const char* fp : linux_extra_fonts) {
+        if (fs::exists(fp)) {
+            Rml::LoadFontFace(fp, false);
+        }
+    }
+#endif
 
-    impl_->canvas_ctx = Rml::CreateContext("rmlui_studio_canvas", Rml::Vector2i(1920, 1080), &impl_->render);
-    impl_->editor_ctx = Rml::CreateContext("rmlui_studio_editor", Rml::Vector2i(1440, 860), &impl_->render);
+    impl_->canvas_ctx = Rml::CreateContext("rmlui_studio_canvas", Rml::Vector2i(1920, 1080), impl_->render.get());
+    impl_->editor_ctx = Rml::CreateContext("rmlui_studio_editor", Rml::Vector2i(1440, 860), impl_->render.get());
     if (!impl_->canvas_ctx || !impl_->editor_ctx) {
         if (impl_->font_fallback.Inner()) Rml::SetFontEngineInterface(impl_->font_fallback.Inner());
         Rml::Shutdown();
-        impl_->render.Shutdown();
+        impl_->render.reset();
+        impl_->sys.reset();
+        RmlGL3::Shutdown();
         return false;
     }
     impl_->initialized = true;
@@ -870,14 +506,16 @@ void RmlEngineHost::Shutdown() {
         if (impl_->editor_ctx) { Rml::RemoveContext("rmlui_studio_editor"); impl_->editor_ctx = nullptr; }
         if (impl_->font_fallback.Inner()) Rml::SetFontEngineInterface(impl_->font_fallback.Inner());
         Rml::Shutdown();
-        impl_->render.Shutdown();
+        impl_->render.reset();
+        impl_->sys.reset();
+        RmlGL3::Shutdown();
         impl_->initialized = false;
     }
 }
 
-void RmlEngineHost::SyncAndRenderCanvas(const RmlDocument& doc, ID3D11Device* device, ID3D11DeviceContext* ctx, bool force) {
+void RmlEngineHost::SyncAndRenderCanvas(const RmlDocument& doc, bool force) {
     if (!impl_->initialized || !impl_->canvas_ctx) return;
-    if (!force && doc.revision == last_revision_ && impl_->canvas_srv) return;
+    if (!force && doc.revision == last_revision_ && impl_->canvas_tex) return;
     last_revision_ = doc.revision;
 
     const int w = std::clamp(doc.screen_width, 64, 4096);
@@ -906,7 +544,7 @@ void RmlEngineHost::SyncAndRenderCanvas(const RmlDocument& doc, ID3D11Device* de
         impl_->canvas_doc->Show();
     }
     impl_->canvas_ctx->Update();
-    impl_->RenderCanvasToTexture(device, ctx, w, h);
+    impl_->RenderCanvasToTexture(w, h);
 }
 
 namespace {
@@ -977,18 +615,17 @@ bool RmlEngineHost::SetCanvasNodeBoxProps(int node_id, float x, float y, float w
     return true;
 }
 
-void RmlEngineHost::FlushCanvasRender(ID3D11Device* device, ID3D11DeviceContext* ctx) {
+void RmlEngineHost::FlushCanvasRender() {
     if (!impl_->initialized || !impl_->canvas_ctx) return;
     impl_->canvas_ctx->Update();
     auto dims = impl_->canvas_ctx->GetDimensions();
-    impl_->RenderCanvasToTexture(device, ctx, std::max(64, dims.x), std::max(64, dims.y));
+    impl_->RenderCanvasToTexture(std::max(64, dims.x), std::max(64, dims.y));
 }
 
 bool RmlEngineHost::UpdateCanvasNodeBox(int node_id, float x, float y, float w, float h,
-                                        bool use_pct, float screen_w, float screen_h,
-                                        ID3D11Device* device, ID3D11DeviceContext* ctx) {
+                                        bool use_pct, float screen_w, float screen_h) {
     if (!SetCanvasNodeBoxProps(node_id, x, y, w, h, use_pct, screen_w, screen_h)) return false;
-    FlushCanvasRender(device, ctx);
+    FlushCanvasRender();
     return true;
 }
 
@@ -1087,11 +724,11 @@ int RmlEngineHost::PickNodeAtCanvasPoint(float x, float y) const {
     return visit(impl_->canvas_doc, {0.0f, 0.0f, 0.0f, 0.0f, false});
 }
 
-void RmlEngineHost::RenderCanvasInteractive(ID3D11Device* device, ID3D11DeviceContext* ctx) {
+void RmlEngineHost::RenderCanvasInteractive() {
     if (!impl_->initialized || !impl_->canvas_ctx) return;
     impl_->canvas_ctx->Update();
     auto dims = impl_->canvas_ctx->GetDimensions();
-    impl_->RenderCanvasToTexture(device, ctx, std::max(64, dims.x), std::max(64, dims.y));
+    impl_->RenderCanvasToTexture(std::max(64, dims.x), std::max(64, dims.y));
 }
 
 void RmlEngineHost::CanvasMouseMove(int x, int y) {
@@ -1108,8 +745,8 @@ void RmlEngineHost::CanvasMouseWheel(float delta) {
 void RmlEngineHost::CanvasTextInput(uint32_t codepoint) {
     if (impl_->initialized && impl_->canvas_ctx) impl_->canvas_ctx->ProcessTextInput(static_cast<Rml::Character>(codepoint));
 }
-ID3D11ShaderResourceView* RmlEngineHost::CanvasSRV() const {
-    return impl_ ? impl_->canvas_srv : nullptr;
+unsigned int RmlEngineHost::CanvasTexture() const {
+    return impl_ ? static_cast<unsigned int>(impl_->canvas_tex) : 0u;
 }
 
 Rml::ElementDocument* RmlEngineHost::LoadEditorDocument(const std::string& rml, const std::string& rcss) {
@@ -1135,12 +772,13 @@ void RmlEngineHost::ResizeEditor(int w, int h) {
     impl_->editor_ctx->SetDimensions({w, h});
 }
 
-void RmlEngineHost::RenderEditor(ID3D11Device* /*device*/, ID3D11DeviceContext* /*ctx*/) {
-    if (!impl_->initialized || !impl_->editor_ctx) return;
+void RmlEngineHost::RenderEditor() {
+    if (!impl_->initialized || !impl_->editor_ctx || !impl_->render) return;
     impl_->editor_ctx->Update();
-    impl_->render.SetViewport(impl_->editor_w, impl_->editor_h);
-    impl_->render.BeginPass();
+    impl_->render->SetViewport(impl_->editor_w, impl_->editor_h);
+    impl_->render->BeginFrame();
     impl_->editor_ctx->Render();
+    impl_->render->EndFrame();
 }
 
 Rml::Context* RmlEngineHost::EditorContext() {
@@ -1522,9 +1160,9 @@ bool RmlEngineHost::ApplyRmlStringAndSync(const std::string& raw_rml, RmlDocumen
         }
 
         Rml::Factory::ClearStyleSheetCache();
-        int prev_xml_errs = impl_->sys.xml_error_count;
+        int prev_xml_errs = impl_->sys->xml_error_count;
         Rml::ElementDocument* parsed = impl_->canvas_ctx->LoadDocumentFromMemory(load_rml);
-        if (!parsed || impl_->sys.xml_error_count > prev_xml_errs) {
+        if (!parsed || impl_->sys->xml_error_count > prev_xml_errs) {
             if (parsed) parsed->Close();
             out_error = "Sintaxe RML incompleta ou invalida.";
             return false;
