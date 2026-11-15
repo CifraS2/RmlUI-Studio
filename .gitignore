@@ -1,0 +1,24 @@
+*~
+.DS_Store
+
+# Build outputs (CMake / Visual Studio / MSVC)
+/build/
+/out/
+/.vs/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+*.filters
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.obj
+*.exe
+*.dll
+
+# Local notes / logs
+/plan/
+/plans/
+/log/
