@@ -1,4 +1,4 @@
-﻿#include "studio_ui.h"
+#include "studio_ui.h"
 #include "platform_utils.h"
 
 #include "../third_party/RmlUi/Backends/RmlUi_Platform_GLFW.h"
@@ -1328,6 +1328,7 @@ button.canvas-bg-btn:hover {
     height: 20px;
     position: relative;
     overflow: hidden;
+    clip: always;
     background-color: #12151D;
 }
 
@@ -1337,6 +1338,7 @@ button.canvas-bg-btn:hover {
     display: flex;
     flex-direction: row;
     overflow: hidden;
+    clip: always;
     background-color: rgba(0, 0, 0, 0);
 }
 
@@ -1345,6 +1347,7 @@ button.canvas-bg-btn:hover {
     height: 100%;
     position: relative;
     overflow: hidden;
+    clip: always;
     background-color: #12151D;
     border-right: 1px #252A34;
     flex-shrink: 0;
@@ -1376,9 +1379,13 @@ button.canvas-bg-btn:hover {
 
 #viewport {
     flex: 1;
+    min-width: 0;
+    min-height: 0;
     height: 100%;
     position: relative;
     overflow: hidden;
+    clip: always;
+    pointer-events: none;
     background-color: rgba(0, 0, 0, 0);
 }
 
@@ -1390,6 +1397,7 @@ button.canvas-bg-btn:hover {
     width: 100px;
     height: 100px;
     overflow: hidden;
+    pointer-events: none;
     background-color: rgba(0, 0, 0, 0);
 }
 
@@ -1399,6 +1407,7 @@ button.canvas-bg-btn:hover {
     left: 20px;
     font-size: 8px;
     font-weight: bold;
+    pointer-events: none;
     color: rgba(113, 134, 184, 110);
 }
 
@@ -1414,6 +1423,7 @@ button.canvas-bg-btn:hover {
     justify-content: center;
     padding-bottom: 18px;
     text-align: center;
+    pointer-events: none;
 }
 
 .empty-icon {
@@ -1463,6 +1473,7 @@ button.empty-add-btn {
     color: #EDF2FF;
     font-size: 10px;
     font-weight: bold;
+    pointer-events: auto;
 }
 
 button.empty-add-btn:hover {
@@ -1484,6 +1495,7 @@ button.empty-add-btn:hover {
     color: #99A7C4;
     font-family: Consolas;
     font-size: 9px;
+    pointer-events: none;
 }
 
 /* BOTTOM CODE DOCK (190px) */
@@ -2649,6 +2661,7 @@ const char* kEditorRml = R"RML(<rml>
         </div>
 
         <div class="top-actions">
+            <button id="btn-lang" class="icon-button" title="Language: EN / PT-BR" style="width:auto; padding:0px 8px; font-size:10px; font-weight:bold; color:#CBD5E1;"><span id="lbl-lang">EN</span></button>
             <button id="btn-help" class="icon-button" title="Ajuda e Atalhos"><img class="ico ico-16" src="studio_ico_help" /></button>
             <button id="btn-settings" class="icon-button" title="Alternar Safe Area / Fundo"><img class="ico ico-16" src="studio_ico_settings" /></button>
             <div class="avatar">FC</div>
@@ -2686,7 +2699,7 @@ const char* kEditorRml = R"RML(<rml>
             <div class="panel-heading">
                 <div class="panel-heading-left">
                     <img class="ico ico-14 ico-soft" src="studio_ico_layers" />
-                    <span>Hierarquia</span>
+                    <span id="lbl-hier-title">Hierarquia</span>
                 </div>
                 <button id="btn-hier-add" class="icon-button tiny" title="Adicionar Elemento"><img class="ico ico-14" src="studio_ico_plus" /></button>
             </div>
@@ -2697,7 +2710,7 @@ const char* kEditorRml = R"RML(<rml>
             </div>
 
             <div class="tree-label-row">
-                <span>CAMADAS</span>
+                <span id="lbl-layers-hdr">CAMADAS</span>
                 <span id="layers-count" class="tree-count">1</span>
             </div>
 
@@ -2749,9 +2762,9 @@ const char* kEditorRml = R"RML(<rml>
                             <div id="safe-area-label">&#193;REA SEGURA</div>
                             <div id="canvas-empty-center">
                                 <div class="empty-icon"><img class="ico ico-28 ico-hero-blue" src="studio_ico_file_code" /></div>
-                                <div class="canvas-eyebrow">CANVAS VAZIO</div>
-                                <div class="empty-h1">Sua pr&#243;xima ideia<br/>come&#231;a aqui.</div>
-                                <div class="empty-p">Adicione elementos e construa sua interface.</div>
+                                <div id="lbl-empty-eyebrow" class="canvas-eyebrow">CANVAS VAZIO</div>
+                                <div id="lbl-empty-h1" class="empty-h1">Sua pr&#243;xima ideia<br/>come&#231;a aqui.</div>
+                                <div id="lbl-empty-p" class="empty-p">Adicione elementos e construa sua interface.</div>
                                 <button id="btn-empty-add" class="empty-add-btn"><img class="ico ico-15 ico-light-blue" src="studio_ico_plus" /><span>Adicionar elemento</span></button>
                             </div>
                             <div id="artboard-meta">
@@ -2816,20 +2829,20 @@ const char* kEditorRml = R"RML(<rml>
 
                 <!-- Identificacao DOM -->
                 <div class="inspector-section">
-                    <div class="section-title"><span>Identifica&#231;&#227;o</span><span class="section-tag">DOM</span></div>
+                    <div class="section-title"><span id="lbl-sec-dom">Identifica&#231;&#227;o</span><span class="section-tag">DOM</span></div>
                     <div class="sec-body">
                         <div class="field-grid2">
                             <div class="field-col">
-                                <span class="field-caption">ID (#)</span>
+                                <span id="lbl-cap-id" class="field-caption">ID (#)</span>
                                 <input id="prop-id" type="text" class="insp-in" />
                             </div>
                             <div class="field-col">
-                                <span class="field-caption">Classe (.)</span>
+                                <span id="lbl-cap-class" class="field-caption">Classe (.)</span>
                                 <input id="prop-class" type="text" class="insp-in" />
                             </div>
                         </div>
                         <div class="visibility-row">
-                            <span>Vis&#237;vel no RmlUi</span>
+                            <span id="lbl-vis-row">Vis&#237;vel no RmlUi</span>
                             <button id="prop-visible" class="toggle on" title="Alternar Visibilidade"><span class="toggle-knob"></span></button>
                         </div>
                         <div class="quick-actions">
@@ -2842,7 +2855,7 @@ const char* kEditorRml = R"RML(<rml>
 
                 <!-- Transformar BOX MODEL -->
                 <div class="inspector-section">
-                    <div class="section-title"><span>Transformar</span><span class="section-tag">BOX MODEL</span></div>
+                    <div class="section-title"><span id="lbl-sec-transform">Transformar</span><span class="section-tag">BOX MODEL</span></div>
                     <div class="sec-body">
                         <div class="align-toolbar">
                             <button id="btn-align-left" class="align-btn" title="Alinhar &#224; Esquerda"><img class="ico ico-13" src="studio_ico_al_left" /></button>
@@ -2857,27 +2870,27 @@ const char* kEditorRml = R"RML(<rml>
                         </div>
                         <div class="field-grid2">
                             <div class="field-col">
-                                <span class="field-caption">Posi&#231;&#227;o X</span>
+                                <span id="lbl-cap-x" class="field-caption">Posi&#231;&#227;o X</span>
                                 <div class="input-unit"><input id="prop-x" type="text" class="unit-in" /><span class="unit-sfx">px</span></div>
                             </div>
                             <div class="field-col">
-                                <span class="field-caption">Posi&#231;&#227;o Y</span>
+                                <span id="lbl-cap-y" class="field-caption">Posi&#231;&#227;o Y</span>
                                 <div class="input-unit"><input id="prop-y" type="text" class="unit-in" /><span class="unit-sfx">px</span></div>
                             </div>
                         </div>
                         <div class="field-grid2">
                             <div class="field-col">
-                                <span class="field-caption">Largura</span>
+                                <span id="lbl-cap-w" class="field-caption">Largura</span>
                                 <div class="input-unit"><input id="prop-w" type="text" class="unit-in" /><span class="unit-sfx">&#8596;</span></div>
                             </div>
                             <div class="field-col">
-                                <span class="field-caption">Altura</span>
+                                <span id="lbl-cap-h" class="field-caption">Altura</span>
                                 <div class="input-unit"><input id="prop-h" type="text" class="unit-in" /><span class="unit-sfx">&#8597;</span></div>
                             </div>
                         </div>
                         <div class="field-grid2">
                             <div class="field-col">
-                                <span class="field-caption">Redim. W</span>
+                                <span id="lbl-cap-rw" class="field-caption">Redim. W</span>
                                 <div class="seg-row seg-row-compact">
                                     <button id="rw-fixed" class="seg-btn active" title="Largura fixa"><span>Fix</span></button>
                                     <button id="rw-hug" class="seg-btn" title="Ajustar ao conte&#250;do (Hug)"><span>Hug</span></button>
@@ -2885,7 +2898,7 @@ const char* kEditorRml = R"RML(<rml>
                                 </div>
                             </div>
                             <div class="field-col">
-                                <span class="field-caption">Redim. H</span>
+                                <span id="lbl-cap-rh" class="field-caption">Redim. H</span>
                                 <div class="seg-row seg-row-compact">
                                     <button id="rh-fixed" class="seg-btn active" title="Altura fixa"><span>Fix</span></button>
                                     <button id="rh-hug" class="seg-btn" title="Ajustar ao conte&#250;do (Hug)"><span>Hug</span></button>
@@ -2894,7 +2907,7 @@ const char* kEditorRml = R"RML(<rml>
                             </div>
                         </div>
                         <div class="field-col last">
-                            <span class="field-caption">Unidade</span>
+                            <span id="lbl-cap-unit" class="field-caption">Unidade</span>
                             <div class="seg-row">
                                 <button id="u-px" class="seg-btn active"><span>px</span></button>
                                 <button id="u-pct" class="seg-btn"><span>%</span></button>
@@ -2906,7 +2919,7 @@ const char* kEditorRml = R"RML(<rml>
 
                 <!-- Ancoragem CONSTRAINTS -->
                 <div class="inspector-section">
-                    <div class="section-title"><span>Ancoragem</span><span class="section-tag">CONSTRAINTS</span></div>
+                    <div class="section-title"><span id="lbl-sec-constraints">Ancoragem</span><span class="section-tag">CONSTRAINTS</span></div>
                     <div class="sec-body">
                         <div class="constraint-row">
                             <div id="constraint-diagram" title="Clique nos pinos para ancorar">
@@ -2965,7 +2978,7 @@ const char* kEditorRml = R"RML(<rml>
                             </div>
                         </div>
                         <div class="field-col">
-                            <span class="field-caption">Dire&#231;&#227;o</span>
+                            <span id="lbl-cap-dir" class="field-caption">Dire&#231;&#227;o</span>
                             <div class="seg-row">
                                 <button id="dir-col" class="seg-btn active"><span>Coluna</span></button>
                                 <button id="dir-row" class="seg-btn"><span>Linha</span></button>
@@ -3003,14 +3016,14 @@ const char* kEditorRml = R"RML(<rml>
 
                 <!-- Grades de Layout LAYOUT GRIDS -->
                 <div class="inspector-section">
-                    <div class="section-title"><span>Grades de Layout</span><span class="section-tag">GRID</span></div>
+                    <div class="section-title"><span id="lbl-sec-grid">Grades de Layout</span><span class="section-tag">GRID</span></div>
                     <div class="sec-body">
                         <div class="grid-head-row">
-                            <span>Exibir Grade no Container</span>
+                            <span id="lbl-grid-enable">Exibir Grade no Container</span>
                             <button id="grid-enable" class="toggle" title="Ativar grade de layout no elemento"><span class="toggle-knob"></span></button>
                         </div>
                         <div class="field-col">
-                            <span class="field-caption">Tipo</span>
+                            <span id="lbl-gtype" class="field-caption">Tipo</span>
                             <div class="seg-row seg-row-compact">
                                 <button id="gtype-col" class="seg-btn active"><span>Colunas</span></button>
                                 <button id="gtype-row" class="seg-btn"><span>Linhas</span></button>
@@ -3019,11 +3032,11 @@ const char* kEditorRml = R"RML(<rml>
                         </div>
                         <div class="field-grid2">
                             <div class="field-col">
-                                <span class="field-caption">Quantidade</span>
+                                <span id="lbl-gcount" class="field-caption">Quantidade</span>
                                 <div class="input-unit"><input id="prop-grid-count" type="text" class="unit-in" /><span class="unit-sfx">x</span></div>
                             </div>
                             <div class="field-col">
-                                <span class="field-caption">Tamanho</span>
+                                <span id="lbl-gsize" class="field-caption">Tamanho</span>
                                 <div class="input-unit"><input id="prop-grid-size" type="text" class="unit-in" /><span class="unit-sfx">px</span></div>
                             </div>
                         </div>
@@ -3033,12 +3046,12 @@ const char* kEditorRml = R"RML(<rml>
                                 <div class="input-unit"><input id="prop-grid-gutter" type="text" class="unit-in" /><span class="unit-sfx">px</span></div>
                             </div>
                             <div class="field-col">
-                                <span class="field-caption">Margem</span>
+                                <span id="lbl-gmargin" class="field-caption">Margem</span>
                                 <div class="input-unit"><input id="prop-grid-margin" type="text" class="unit-in" /><span class="unit-sfx">px</span></div>
                             </div>
                         </div>
                         <div class="color-field" style="margin-bottom:0px;">
-                            <span>Cor da Grade</span>
+                            <span id="lbl-gcolor">Cor da Grade</span>
                             <div class="color-input-grp">
                                 <div id="swatch-grid" class="swatch"></div>
                                 <input id="prop-grid-color" type="text" class="hex-in" />
@@ -3049,10 +3062,10 @@ const char* kEditorRml = R"RML(<rml>
 
                 <!-- Aparencia ESTILO -->
                 <div class="inspector-section">
-                    <div class="section-title"><span>Apar&#234;ncia</span><span class="section-tag">ESTILO</span></div>
+                    <div class="section-title"><span id="lbl-sec-style">Apar&#234;ncia</span><span id="lbl-tag-style" class="section-tag">ESTILO</span></div>
                     <div class="sec-body">
                         <div class="color-field">
-                            <span>Preenchimento</span>
+                            <span id="lbl-fill">Preenchimento</span>
                             <div class="color-input-grp">
                                 <div id="swatch-bg" class="swatch"></div>
                                 <input id="prop-bg" type="text" class="hex-in" />
@@ -3060,7 +3073,7 @@ const char* kEditorRml = R"RML(<rml>
                             </div>
                         </div>
                         <div class="color-field">
-                            <span>Borda</span>
+                            <span id="lbl-border">Borda</span>
                             <div class="color-input-grp">
                                 <div id="swatch-border" class="swatch"></div>
                                 <input id="prop-border" type="text" class="hex-in" />
@@ -3069,11 +3082,11 @@ const char* kEditorRml = R"RML(<rml>
                         </div>
                         <div class="field-grid2 last">
                             <div class="field-col last">
-                                <span class="field-caption">Raio</span>
+                                <span id="lbl-radius" class="field-caption">Raio</span>
                                 <div class="input-unit"><input id="prop-radius" type="text" class="unit-in" /><span class="unit-sfx">px</span></div>
                             </div>
                             <div class="field-col last">
-                                <span class="field-caption">Alpha Borda</span>
+                                <span id="lbl-border-a" class="field-caption">Alpha Borda</span>
                                 <div class="input-unit"><input id="prop-border-a" type="text" class="unit-in" /><span class="unit-sfx">A</span></div>
                             </div>
                         </div>
@@ -3082,19 +3095,19 @@ const char* kEditorRml = R"RML(<rml>
 
                 <!-- Tipografia TEXTO -->
                 <div class="inspector-section">
-                    <div class="section-title"><span>Tipografia</span><span class="section-tag">TEXTO</span></div>
+                    <div class="section-title"><span id="lbl-sec-typo">Tipografia</span><span id="lbl-tag-typo" class="section-tag">TEXTO</span></div>
                     <div class="sec-body">
                         <div class="field-col">
-                            <span class="field-caption">Conte&#250;do</span>
+                            <span id="lbl-content" class="field-caption">Conte&#250;do</span>
                             <input id="prop-text" type="text" class="insp-in" />
                         </div>
                         <div class="field-grid2">
                             <div class="field-col">
-                                <span class="field-caption">Tamanho</span>
+                                <span id="lbl-fsize" class="field-caption">Tamanho</span>
                                 <div class="input-unit"><input id="prop-font-size" type="text" class="unit-in" /><span class="unit-sfx">px</span></div>
                             </div>
                             <div class="field-col">
-                                <span class="field-caption">Alinhar</span>
+                                <span id="lbl-falign" class="field-caption">Alinhar</span>
                                 <div class="seg-row">
                                     <button id="al-left" class="seg-btn active"><span>E</span></button>
                                     <button id="al-center" class="seg-btn"><span>C</span></button>
@@ -3103,14 +3116,14 @@ const char* kEditorRml = R"RML(<rml>
                             </div>
                         </div>
                         <div class="color-field">
-                            <span>Cor Texto</span>
+                            <span id="lbl-fcolor">Cor Texto</span>
                             <div class="color-input-grp">
                                 <div id="swatch-fg" class="swatch"></div>
                                 <input id="prop-fg" type="text" class="hex-in" />
                             </div>
                         </div>
                         <div class="field-col last">
-                            <span class="field-caption">Imagem</span>
+                            <span id="lbl-image" class="field-caption">Imagem</span>
                             <div class="field-grid2 last">
                                 <input id="prop-src" type="text" class="insp-in" style="flex:1; min-width:0;" />
                                 <button id="btn-pick-img" class="pick-btn"><span>...</span></button>
@@ -3363,6 +3376,213 @@ struct StudioUI::Impl {
     enum class CpDrag { None, SV, Hue };
     CpDrag cp_drag = CpDrag::None;
 
+    enum class UiLang { En, Pt };
+    UiLang lang = UiLang::En;
+    bool is_dirty = false;
+    bool has_custom_filename = false;
+
+    const char* Tr(const char* en, const char* pt) const {
+        return (lang == UiLang::Pt) ? pt : en;
+    }
+
+    void SetSavedState(bool dirty) {
+        is_dirty = dirty;
+        if (auto* st = ui_doc ? ui_doc->GetElementById("saved-text") : nullptr) {
+            st->SetInnerRML(dirty ? Tr("Edited", "Editado") : Tr("Saved", "Salvo"));
+        }
+    }
+
+    void ApplyLanguage() {
+        if (!ui_doc) return;
+        auto set_id = [&](const char* id, const char* en, const char* pt) {
+            if (auto* el = ui_doc->GetElementById(id)) {
+                el->SetInnerRML(Tr(en, pt));
+            }
+        };
+        auto set_span = [&](const char* id, const char* en, const char* pt) {
+            if (auto* el = ui_doc->GetElementById(id)) {
+                for (int i = 0; i < el->GetNumChildren(); ++i) {
+                    if (auto* ch = el->GetChild(i)) {
+                        if (ch->GetTagName() == "span") {
+                            ch->SetInnerRML(Tr(en, pt));
+                            return;
+                        }
+                    }
+                }
+            }
+        };
+        auto set_title = [&](const char* id, const char* en, const char* pt) {
+            if (auto* el = ui_doc->GetElementById(id)) {
+                el->SetAttribute("title", Tr(en, pt));
+            }
+        };
+
+        set_id("lbl-lang", "EN", "PT");
+        set_title("btn-lang", "Switch Language (EN / PT-BR)", "Alterar Idioma (EN / PT-BR)");
+        if (!has_custom_filename) {
+            set_id("menu-filename", "Untitled Project", "Projeto sem t&#237;tulo");
+        }
+        SetSavedState(is_dirty);
+
+        // Topbar & Toolbar
+        set_span("m-file", "File", "Arquivo");
+        set_span("m-edit", "Edit", "Editar");
+        set_span("m-view", "View", "Exibir");
+        set_span("m-vp", "Viewport", "Viewport");
+        set_title("btn-help", "Help & Shortcuts", "Ajuda e Atalhos");
+        set_title("btn-settings", "Toggle Safe Area / Background", "Alternar Safe Area / Fundo");
+
+        set_span("btn-new", "New", "Novo");
+        set_title("btn-new", "Add Element or New Project", "Adicionar Elemento ou Novo Projeto");
+        set_span("btn-imp-menu", "Import", "Importar");
+        set_title("btn-imp-menu", "Import .RML or .RCSS", "Importar .RML ou .RCSS");
+        set_title("btn-undo", "Undo (Ctrl+Z)", "Desfazer (Ctrl+Z)");
+        set_title("btn-redo", "Redo (Ctrl+Y)", "Refazer (Ctrl+Y)");
+        set_span("bg-grid", "Grid", "Grade");
+        set_title("bg-grid", "Toggle Grid", "Alternar Grade");
+        set_id("lbl-play", play_mode ? "Stop" : "Preview", play_mode ? "Parar" : "Pr&#233;-visualizar");
+        set_title("btn-play", "Toggle Interactive Preview", "Alternar Pr&#233;-visualiza&#231;&#227;o Interativa");
+        set_span("btn-export", "Export", "Exportar");
+        set_title("btn-export", "Export .RML + .RCSS", "Exportar .RML + .RCSS");
+
+        // Left Panel
+        set_id("lbl-hier-title", "Hierarchy", "Hierarquia");
+        set_title("btn-hier-add", "Add Element", "Adicionar Elemento");
+        if (auto* hs = ui_doc->GetElementById("hier-search")) {
+            hs->SetAttribute("placeholder", Tr("Search elements", "Buscar elementos"));
+        }
+        set_id("lbl-layers-hdr", "LAYERS", "CAMADAS");
+        set_id("left-footer-text", "All elements synced", "Todos os elementos sincronizados");
+
+        // Viewport & Empty State
+        set_title("tool-sel", "Select (V)", "Selecionar (V)");
+        set_title("tool-pan", "Pan Canvas (H)", "Mover Canvas (H)");
+        set_title("btn-canvas-grid", "Grid", "Grade");
+        set_title("btn-canvas-snap", "Smart Guides & Snap (hold Ctrl to bypass)", "Guias Inteligentes e Snap (Ctrl desativa temporariamente)");
+        set_title("btn-canvas-bg", "Editor Background Color (White / Custom)", "Cor de Fundo do Editor (Branco / Custom)");
+        set_title("btn-zoom-out", "Zoom Out", "Diminuir Zoom");
+        set_title("btn-zoom-in", "Zoom In", "Aumentar Zoom");
+        set_title("btn-fit", "Fit to Viewport", "Ajustar ao Viewport");
+        set_id("safe-area-label", "SAFE AREA", "&#193;REA SEGURA");
+        set_id("lbl-empty-eyebrow", "EMPTY CANVAS", "CANVAS VAZIO");
+        set_id("lbl-empty-h1", "Your next idea<br/>starts here.", "Sua pr&#243;xima ideia<br/>come&#231;a aqui.");
+        set_id("lbl-empty-p", "Add elements and build your interface.", "Adicione elementos e construa sua interface.");
+        set_span("btn-empty-add", "Add element", "Adicionar elemento");
+
+        // Code Dock
+        set_span("tab-code-rml", "Structure", "Estrutura");
+        set_span("tab-code-rcss", "Styles", "Estilos");
+        set_title("btn-expand-code", "Expand / Collapse Script Editor", "Expandir / Recolher Editor de Script");
+        set_id("lbl-expand-code", code_expanded ? "Collapse" : "Expand", code_expanded ? "Recolher" : "Expandir");
+        set_span("btn-copy-code", "Copy code", "Copiar c&#243;digo");
+
+        // Inspector
+        set_title("btn-insp-more", "Element Actions", "A&#231;&#245;es do Elemento");
+        set_id("lbl-sec-dom", "Identification", "Identifica&#231;&#227;o");
+        set_id("lbl-cap-id", "ID (#)", "ID (#)");
+        set_id("lbl-cap-class", "Class (.)", "Classe (.)");
+        set_id("lbl-vis-row", "Visible in RmlUi", "Vis&#237;vel no RmlUi");
+        set_title("prop-visible", "Toggle Visibility", "Alternar Visibilidade");
+        set_span("act-dup", "Duplicate", "Duplicar");
+        set_title("act-dup", "Duplicate (Ctrl+D)", "Duplicar (Ctrl+D)");
+        set_span("act-del", "Delete", "Excluir");
+        set_title("act-del", "Delete (Del)", "Excluir (Del)");
+        set_title("act-lock", "Lock / Unlock", "Bloquear / Desbloquear");
+
+        set_id("lbl-sec-transform", "Transform", "Transformar");
+        set_title("btn-align-left", "Align Left", "Alinhar &#224; Esquerda");
+        set_title("btn-align-hcenter", "Center Horizontally", "Centralizar Horizontalmente");
+        set_title("btn-align-right", "Align Right", "Alinhar &#224; Direita");
+        set_title("btn-align-top", "Align Top", "Alinhar ao Topo");
+        set_title("btn-align-vcenter", "Center Vertically", "Centralizar Verticalmente");
+        set_title("btn-align-bottom", "Align Bottom", "Alinhar embaixo");
+        set_title("btn-dist-h", "Distribute Horizontally (3+ elements)", "Distribuir Horizontalmente (3+ elementos)");
+        set_title("btn-dist-v", "Distribute Vertically (3+ elements)", "Distribuir Verticalmente (3+ elementos)");
+        set_id("lbl-cap-x", "Position X", "Posi&#231;&#227;o X");
+        set_id("lbl-cap-y", "Position Y", "Posi&#231;&#227;o Y");
+        set_id("lbl-cap-w", "Width", "Largura");
+        set_id("lbl-cap-h", "Height", "Altura");
+        set_id("lbl-cap-rw", "Resize W", "Redim. W");
+        set_id("lbl-cap-rh", "Resize H", "Redim. H");
+        set_title("rw-fixed", "Fixed width", "Largura fixa");
+        set_title("rw-hug", "Hug contents", "Ajustar ao conte&#250;do (Hug)");
+        set_title("rw-fill", "Fill container", "Preencher container (Fill)");
+        set_title("rh-fixed", "Fixed height", "Altura fixa");
+        set_title("rh-hug", "Hug contents", "Ajustar ao conte&#250;do (Hug)");
+        set_title("rh-fill", "Fill container", "Preencher container (Fill)");
+        set_id("lbl-cap-unit", "Unit", "Unidade");
+
+        set_id("lbl-sec-constraints", "Constraints", "Ancoragem");
+        set_title("constraint-diagram", "Click pins to anchor", "Clique nos pinos para ancorar");
+        set_title("cpin-top", "Top", "Topo");
+        set_title("cpin-bottom", "Bottom", "Embaixo");
+        set_title("cpin-left", "Left", "Esquerda");
+        set_title("cpin-right", "Right", "Direita");
+        set_title("cpin-hcenter", "Center H", "Centralizar H");
+        set_title("cpin-vcenter", "Center V", "Centralizar V");
+        set_span("ch-left", "Left", "Esq");
+        set_span("ch-right", "Right", "Dir");
+        set_span("ch-lr", "L+R", "E+D");
+        set_span("ch-center", "Cen", "Cen");
+        set_span("ch-scale", "Scale", "Esc");
+        set_span("cv-top", "Top", "Top");
+        set_span("cv-bottom", "Bot", "Inf");
+        set_span("cv-tb", "T+B", "T+I");
+        set_span("cv-center", "Cen", "Cen");
+        set_span("cv-scale", "Scale", "Esc");
+
+        set_span("wrap-off", "No Wrap", "Fixo");
+        set_span("wrap-on", "Wrap", "Quebrar");
+        set_id("lbl-cap-dir", "Direction", "Dire&#231;&#227;o");
+        set_span("dir-col", "Column", "Coluna");
+        set_span("dir-row", "Row", "Linha");
+        set_span("jc-start", "Start", "Ini");
+        set_span("jc-center", "Cen", "Cen");
+        set_span("jc-end", "End", "Fim");
+        set_span("jc-between", "Spc", "Esp");
+        set_span("ai-start", "Start", "Ini");
+        set_span("ai-center", "Cen", "Cen");
+        set_span("ai-end", "End", "Fim");
+
+        set_id("lbl-sec-grid", "Layout Grids", "Grades de Layout");
+        set_id("lbl-grid-enable", "Show Grid on Container", "Exibir Grade no Container");
+        set_title("grid-enable", "Enable layout grid on element", "Ativar grade de layout no elemento");
+        set_id("lbl-gtype", "Type", "Tipo");
+        set_span("gtype-col", "Columns", "Colunas");
+        set_span("gtype-row", "Rows", "Linhas");
+        set_span("gtype-grid", "Grid", "Grade");
+        set_id("lbl-gcount", "Count", "Quantidade");
+        set_id("lbl-gsize", "Size", "Tamanho");
+        set_id("lbl-gmargin", "Margin", "Margem");
+        set_id("lbl-gcolor", "Grid Color", "Cor da Grade");
+
+        set_id("lbl-sec-style", "Appearance", "Apar&#234;ncia");
+        set_id("lbl-tag-style", "STYLE", "ESTILO");
+        set_id("lbl-fill", "Fill", "Preenchimento");
+        set_id("lbl-border", "Border", "Borda");
+        set_title("prop-border-w", "Width px", "Espessura px");
+        set_id("lbl-radius", "Radius", "Raio");
+        set_id("lbl-border-a", "Border Alpha", "Alpha Borda");
+
+        set_id("lbl-sec-typo", "Typography", "Tipografia");
+        set_id("lbl-tag-typo", "TEXT", "TEXTO");
+        set_id("lbl-content", "Content", "Conte&#250;do");
+        set_id("lbl-fsize", "Size", "Tamanho");
+        set_id("lbl-falign", "Align", "Alinhar");
+        set_span("al-left", "L", "E");
+        set_span("al-center", "C", "C");
+        set_span("al-right", "R", "D");
+        set_id("lbl-fcolor", "Text Color", "Cor Texto");
+        set_id("lbl-image", "Image", "Imagem");
+
+        // Color Picker
+        set_id("cp-title", "Color Picker", "Seletor de Cores");
+        set_title("cp-close", "Close (Esc)", "Fechar (Esc)");
+        set_id("cp-cancel", "Cancel", "Cancelar");
+        set_title("cp-preview-new", "New color", "Nova cor");
+        set_title("cp-preview-orig", "Original color (click to restore)", "Cor original (clique para restaurar)");
+    }
+
     std::vector<RmlDocument> undo_stack;
     std::vector<RmlDocument> redo_stack;
     static constexpr size_t kMaxHistory = 40;
@@ -3482,9 +3702,7 @@ struct StudioUI::Impl {
         undo_stack.push_back(*doc);
         if (undo_stack.size() > kMaxHistory) undo_stack.erase(undo_stack.begin());
         redo_stack.clear();
-        if (auto* st = ui_doc ? ui_doc->GetElementById("saved-text") : nullptr) {
-            st->SetInnerRML("Editado");
-        }
+        SetSavedState(true);
     }
 
     void Undo() {
@@ -3494,7 +3712,7 @@ struct StudioUI::Impl {
         undo_stack.pop_back();
         doc->Touch();
         SyncUIFromDoc(true);
-        ShowToast("AÃ§Ã£o desfeita");
+        ShowToast(Tr("Action undone", "Ação desfeita"));
     }
 
     void Redo() {
@@ -3504,7 +3722,7 @@ struct StudioUI::Impl {
         redo_stack.pop_back();
         doc->Touch();
         SyncUIFromDoc(true);
-        ShowToast("AÃ§Ã£o refeita");
+        ShowToast(Tr("Action redone", "Ação refeita"));
     }
 
     bool GetNodeCanvasBounds(int id, float& wx, float& wy, float& ww, float& wh) const {
@@ -3816,7 +4034,7 @@ struct StudioUI::Impl {
             items.push_back({sid, wx, wy, ww, wh, ox, oy});
         }
         if (items.empty()) {
-            ShowToast("Selecione um elemento para alinhar");
+            ShowToast(Tr("Select an element to align", "Selecione um elemento para alinhar"));
             return;
         }
         float ref_x = 0.0f, ref_y = 0.0f, ref_w = (float)doc->screen_width, ref_h = (float)doc->screen_height;
@@ -3869,7 +4087,7 @@ struct StudioUI::Impl {
             items.push_back({sid, wx, wy, ww, wh, ox, oy});
         }
         if (items.size() < 3) {
-            ShowToast("Selecione 3 ou mais elementos para distribuir");
+            ShowToast(Tr("Select 3 or more elements to distribute", "Selecione 3 ou mais elementos para distribuir"));
             return;
         }
         std::sort(items.begin(), items.end(), [&](const Item& a, const Item& b) {
@@ -4334,16 +4552,16 @@ struct StudioUI::Impl {
         cp_drag = CpDrag::None;
 
         RmlColor initial{255, 255, 255, 255};
-        const char* title = "Seletor de Cores";
+        const char* title = Tr("Color Picker", "Seletor de Cores");
         if (target == ColorTarget::CanvasBg) {
             initial = canvas_bg_color;
-            title = "Cor de Fundo do Canvas";
+            title = Tr("Canvas Background Color", "Cor de Fundo do Canvas");
         } else if (doc) {
             if (const auto* n = doc->FindNode(PrimaryId())) {
-                if (target == ColorTarget::NodeBg) { initial = n->bg_color; title = "Cor de Preenchimento"; }
-                else if (target == ColorTarget::NodeBorder) { initial = n->border_color; title = "Cor da Borda"; }
-                else if (target == ColorTarget::NodeFg) { initial = n->text_color; title = "Cor do Texto"; }
-                else if (target == ColorTarget::NodeGrid) { initial = n->grid_color; title = "Cor da Grade de Layout"; }
+                if (target == ColorTarget::NodeBg) { initial = n->bg_color; title = Tr("Fill Color", "Cor de Preenchimento"); }
+                else if (target == ColorTarget::NodeBorder) { initial = n->border_color; title = Tr("Border Color", "Cor da Borda"); }
+                else if (target == ColorTarget::NodeFg) { initial = n->text_color; title = Tr("Text Color", "Cor do Texto"); }
+                else if (target == ColorTarget::NodeGrid) { initial = n->grid_color; title = Tr("Layout Grid Color", "Cor da Grade de Layout"); }
             }
         }
         cp_orig_color = initial;
@@ -4478,70 +4696,72 @@ struct StudioUI::Impl {
         std::vector<Item> items;
         if (menu == "file") {
             items = {
-                {"pop-new", "Novo Projeto Limpo", "new"},
-                {"pop-irm", "Importar .RML...", "import_rml"},
-                {"pop-irc", "Importar .RCSS...", "import_rcss"},
+                {"pop-new", Tr("New Blank Project", "Novo Projeto Limpo"), "new"},
+                {"pop-irm", Tr("Import .RML...", "Importar .RML..."), "import_rml"},
+                {"pop-irc", Tr("Import .RCSS...", "Importar .RCSS..."), "import_rcss"},
                 {"", "", "", true},
-                {"pop-exp", "Exportar .RML + .RCSS...", "export"},
+                {"pop-exp", Tr("Export .RML + .RCSS...", "Exportar .RML + .RCSS..."), "export"},
                 {"", "", "", true},
-                {"pop-exit", "Sair", "exit_app"}
+                {"pop-exit", Tr("Exit", "Sair"), "exit_app"}
             };
         } else if (menu == "edit") {
             items = {
-                {"pop-undo", "Desfazer (Ctrl+Z)", "undo"},
-                {"pop-redo", "Refazer (Ctrl+Y)", "redo"},
+                {"pop-undo", Tr("Undo (Ctrl+Z)", "Desfazer (Ctrl+Z)"), "undo"},
+                {"pop-redo", Tr("Redo (Ctrl+Y)", "Refazer (Ctrl+Y)"), "redo"},
                 {"", "", "", true},
-                {"pop-dup", "Duplicar Elemento (Ctrl+D)", "act_dup"},
-                {"pop-del", "Excluir Elemento (Delete)", "act_del"},
-                {"pop-lck", "Bloquear / Desbloquear", "act_lock"},
-                {"pop-vis", "Ocultar / Mostrar", "act_vis"}
+                {"pop-dup", Tr("Duplicate Element (Ctrl+D)", "Duplicar Elemento (Ctrl+D)"), "act_dup"},
+                {"pop-del", Tr("Delete Element (Delete)", "Excluir Elemento (Delete)"), "act_del"},
+                {"pop-lck", Tr("Lock / Unlock", "Bloquear / Desbloquear"), "act_lock"},
+                {"pop-vis", Tr("Hide / Show", "Ocultar / Mostrar"), "act_vis"}
             };
         } else if (menu == "view") {
             items = {
-                {"pop-rul", show_rulers ? "Ocultar RÃ©guas" : "Mostrar RÃ©guas", "toggle_rulers"},
-                {"pop-rlat", show_left_ruler ? "Ocultar RÃ©gua Lateral" : "Mostrar RÃ©gua Lateral", "toggle_left_ruler"},
-                {"pop-grd", show_grid ? "Ocultar Grade" : "Mostrar Grade", "toggle_grid"},
-                {"pop-snap", snap_guides ? "Desativar Guias Inteligentes" : "Ativar Guias Inteligentes", "toggle_snap"},
-                {"pop-bot", show_bottom_dock ? "Ocultar Painel de CÃ³digo" : "Mostrar Painel de CÃ³digo", "toggle_bottom_dock"},
-                {"pop-fs", "Tela Cheia (F11)", "toggle_fullscreen"},
+                {"pop-rul", show_rulers ? Tr("Hide Rulers", "Ocultar Réguas") : Tr("Show Rulers", "Mostrar Réguas"), "toggle_rulers"},
+                {"pop-rlat", show_left_ruler ? Tr("Hide Left Ruler", "Ocultar Régua Lateral") : Tr("Show Left Ruler", "Mostrar Régua Lateral"), "toggle_left_ruler"},
+                {"pop-grd", show_grid ? Tr("Hide Grid", "Ocultar Grade") : Tr("Show Grid", "Mostrar Grade"), "toggle_grid"},
+                {"pop-snap", snap_guides ? Tr("Disable Smart Guides", "Desativar Guias Inteligentes") : Tr("Enable Smart Guides", "Ativar Guias Inteligentes"), "toggle_snap"},
+                {"pop-bot", show_bottom_dock ? Tr("Hide Code Panel", "Ocultar Painel de Código") : Tr("Show Code Panel", "Mostrar Painel de Código"), "toggle_bottom_dock"},
+                {"pop-fs", Tr("Fullscreen (F11)", "Tela Cheia (F11)"), "toggle_fullscreen"},
                 {"", "", "", true},
-                {"pop-z100", "Resetar Zoom (100%)", "z100"},
-                {"pop-fit", "Ajustar Tela (Fit)", "fit"}
+                {"pop-lang", Tr("Language: English (Switch to PT-BR)", "Idioma: Português (Mudar para EN)"), "toggle_lang"},
+                {"", "", "", true},
+                {"pop-z100", Tr("Reset Zoom (100%)", "Resetar Zoom (100%)"), "z100"},
+                {"pop-fit", Tr("Fit to Screen (Fit)", "Ajustar Tela (Fit)"), "fit"}
             };
         } else if (menu == "vp") {
             items = {
                 {"pop-pc", "Desktop 1920x1080", "vp_pc"},
                 {"pop-hd", "HD 1280x720", "vp_hd"},
                 {"", "", "", true},
-                {"pop-safe", "Alternar Ãrea Segura", "vp_safe"},
-                {"pop-bgd", "Fundo: Escuro (#0E1117)", "bg_dark"},
-                {"pop-bgw", "Fundo: Branco (#FFFFFF)", "bg_white"},
-                {"pop-bgy", "Fundo: Cinza (#CBD5E1)", "bg_gray"},
-                {"pop-bgta", "Fundo: GTA", "bg_gta"},
-                {"pop-bgc", "Fundo: Escolher Cor...", "bg_custom"}
+                {"pop-safe", Tr("Toggle Safe Area", "Alternar Área Segura"), "vp_safe"},
+                {"pop-bgd", Tr("Background: Dark (#0E1117)", "Fundo: Escuro (#0E1117)"), "bg_dark"},
+                {"pop-bgw", Tr("Background: White (#FFFFFF)", "Fundo: Branco (#FFFFFF)"), "bg_white"},
+                {"pop-bgy", Tr("Background: Gray (#CBD5E1)", "Fundo: Cinza (#CBD5E1)"), "bg_gray"},
+                {"pop-bgta", Tr("Background: GTA", "Fundo: GTA"), "bg_gta"},
+                {"pop-bgc", Tr("Background: Pick Color...", "Fundo: Escolher Cor..."), "bg_custom"}
             };
         } else if (menu == "import") {
             items = {
-                {"pop-irm", "Importar .RML...", "import_rml"},
-                {"pop-irc", "Importar .RCSS...", "import_rcss"},
+                {"pop-irm", Tr("Import .RML...", "Importar .RML..."), "import_rml"},
+                {"pop-irc", Tr("Import .RCSS...", "Importar .RCSS..."), "import_rcss"},
                 {"", "", "", true},
-                {"pop-exp", "Exportar Pacote (.rml + .rcss)...", "export"}
+                {"pop-exp", Tr("Export Bundle (.rml + .rcss)...", "Exportar Pacote (.rml + .rcss)..."), "export"}
             };
         } else if (menu == "add") {
             items = {
                 {"pop-adiv", "Container (div)", "add_div"},
-                {"pop-atxt", "Texto (span)", "add_txt"},
-                {"pop-abtn", "BotÃ£o (button)", "add_btn"},
-                {"pop-ainp", "Campo Input (input)", "add_inp"},
-                {"pop-aimg", "Imagem (img)...", "add_img"},
-                {"pop-abar", "Barra de Progresso", "add_bar"},
+                {"pop-atxt", Tr("Text (span)", "Texto (span)"), "add_txt"},
+                {"pop-abtn", Tr("Button (button)", "Botão (button)"), "add_btn"},
+                {"pop-ainp", Tr("Input Field (input)", "Campo Input (input)"), "add_inp"},
+                {"pop-aimg", Tr("Image (img)...", "Imagem (img)..."), "add_img"},
+                {"pop-abar", Tr("Progress Bar", "Barra de Progresso"), "add_bar"},
                 {"", "", "", true},
-                {"pop-plog", "Template: Painel de Login", "pref_login"},
+                {"pop-plog", Tr("Template: Login Panel", "Template: Painel de Login"), "pref_login"},
                 {"pop-pflx", "Template: Flex Container", "pref_flex"},
-                {"pop-plst", "Template: Lista Scroll", "pref_list"},
+                {"pop-plst", Tr("Template: Scroll List", "Template: Lista Scroll"), "pref_list"},
                 {"pop-pgrd", "Template: Grid 2x2", "pref_grid"},
                 {"", "", "", true},
-                {"pop-new", "Novo Projeto Limpo", "new"}
+                {"pop-new", Tr("New Blank Project", "Novo Projeto Limpo"), "new"}
             };
         }
 
@@ -4617,7 +4837,7 @@ struct StudioUI::Impl {
         if (!created.empty()) {
             selected_ids = created;
             selection_anchor_id = created.back();
-            ShowToast("Elemento duplicado");
+            ShowToast(Tr("Element duplicated", "Elemento duplicado"));
         }
         SyncUIFromDoc(true);
     }
@@ -4636,7 +4856,7 @@ struct StudioUI::Impl {
             selected_ids.end()
         );
         if (selected_ids.empty()) SetSingleSelection(doc->root_id);
-        if (any_deleted) ShowToast("Elemento removido");
+        if (any_deleted) ShowToast(Tr("Element deleted", "Elemento removido"));
         SyncUIFromDoc(true);
     }
 
@@ -4651,18 +4871,18 @@ struct StudioUI::Impl {
             sw->SetProperty("background-color", sw_col.ToCss());
         }
         if (auto* lb = ui_doc->GetElementById("lbl-canvas-bg")) {
-            const char* name = "Fundo";
-            if (bg_style == BgStyle::Dark) name = "Escuro";
-            else if (bg_style == BgStyle::White) name = "Branco";
-            else if (bg_style == BgStyle::Gray) name = "Cinza";
+            const char* name = Tr("Background", "Fundo");
+            if (bg_style == BgStyle::Dark) name = Tr("Dark", "Escuro");
+            else if (bg_style == BgStyle::White) name = Tr("White", "Branco");
+            else if (bg_style == BgStyle::Gray) name = Tr("Gray", "Cinza");
             else if (bg_style == BgStyle::Gta) name = "GTA";
-            else name = "Cor";
+            else name = Tr("Color", "Cor");
             lb->SetInnerRML(name);
         }
         if (auto* e = ui_doc->GetElementById("tool-sel")) e->SetClass("control-active", !hand_tool);
         if (auto* e = ui_doc->GetElementById("tool-pan")) e->SetClass("control-active", hand_tool);
         if (auto* ex = ui_doc->GetElementById("lbl-expand-code")) {
-            ex->SetInnerRML(code_expanded ? "Recolher" : "Expandir");
+            ex->SetInnerRML(code_expanded ? Tr("Collapse", "Recolher") : Tr("Expand", "Expandir"));
         }
 
         if (auto* rt = ui_doc->GetElementById("ruler-top-row")) rt->SetClass("hidden", !show_rulers);
@@ -4672,8 +4892,10 @@ struct StudioUI::Impl {
             cr->SetInnerRML(buf);
         }
         if (auto* sbv = ui_doc->GetElementById("sb-vp")) {
-            char vp_buf[64];
-            std::snprintf(vp_buf, sizeof(vp_buf), "RML &#183; %dx%d &#183; Canvas em tempo real", doc->screen_width, doc->screen_height);
+            char vp_buf[96];
+            std::snprintf(vp_buf, sizeof(vp_buf), "RML &#183; %dx%d &#183; %s",
+                          doc->screen_width, doc->screen_height,
+                          Tr("Live Canvas", "Canvas em tempo real"));
             sbv->SetInnerRML(vp_buf);
         }
         overlay_dirty = true;
@@ -4688,9 +4910,9 @@ struct StudioUI::Impl {
             else if (!n->rml_class.empty()) label = "." + n->rml_class;
             else label = n->tag;
         }
-        std::string status = "Pronto <span class=\"status-sep\">/</span> " + EscapeXml(label);
+        std::string status = std::string(Tr("Ready", "Pronto")) + " <span class=\"status-sep\">/</span> " + EscapeXml(label);
         if (selected_ids.size() > 1) {
-            status += " (" + std::to_string(selected_ids.size()) + " selecionados)";
+            status += " (" + std::to_string(selected_ids.size()) + " " + Tr("selected", "selecionados") + ")";
         }
         if (auto* el = ui_doc->GetElementById("sb-dom")) el->SetInnerRML(status);
     }
@@ -4702,7 +4924,7 @@ struct StudioUI::Impl {
         bool ok = engine->ImportRcssAndSync(path, *doc, err);
         SyncUIFromDoc(true);
         ApplyPanelSizes(win_w, win_h);
-        if (ok) ShowToast("Estilos .RCSS importados");
+        if (ok) ShowToast(Tr(".RCSS styles imported", "Estilos .RCSS importados"));
         return ok;
     }
 
@@ -4731,14 +4953,14 @@ struct StudioUI::Impl {
         if (action == "hier_add")  { OpenPopupNearElement("add",  "btn-hier-add", 160.0f, 138.0f); return; }
         if (action == "empty_add") { OpenPopupNearElement("add",  "btn-empty-add", (float)win_w * 0.5f - 115.0f, (float)win_h * 0.45f); return; }
         if (action == "insp_more") { OpenPopupNearElement("edit", "btn-insp-more", (float)win_w - 245.0f, 138.0f); return; }
-        if (action == "help") {
-            ShowToast("Atalhos: V Selecionar | H/EspaÃ§o Pan | Ctrl+Z/Y | Ctrl+D | Del");
+        if (action == "toggle_lang") {
+            ShowToast(Tr("Shortcuts: V Select | H/Space Pan | Ctrl+Z/Y | Ctrl+D | Del", "Atalhos: V Selecionar | H/Espaço Pan | Ctrl+Z/Y | Ctrl+D | Del"));
             return;
         }
         if (action == "settings") {
             safe_area = !safe_area;
             overlay_dirty = true;
-            ShowToast(safe_area ? "Ãrea segura ativada" : "Ãrea segura oculta");
+            ShowToast(safe_area ? Tr("Safe area enabled", "Área segura ativada") : Tr("Safe area hidden", "Área segura oculta"));
             return;
         }
         if (action == "exit_app") {
@@ -4751,13 +4973,13 @@ struct StudioUI::Impl {
             doc->ResetDefaultScreen();
             SetSingleSelection(doc->root_id);
             if (auto* fn = ui_doc->GetElementById("menu-filename")) {
-                fn->SetInnerRML("Projeto sem t&#237;tulo");
+                has_custom_filename = false;
             }
-            if (auto* st = ui_doc->GetElementById("saved-text")) st->SetInnerRML("Salvo");
+            SetSavedState(false);
             FitViewport();
-            ShowToast("Novo projeto criado");
+            ShowToast(Tr("New project created", "Novo projeto criado"));
         } else if (action == "import_rml" || action == "open") {
-            std::string path = Platform::OpenFileDialog(window, "Importar arquivo .rml", {{"Arquivos RmlUi (*.rml)", "*.rml"}, {"Todos (*.*)", "*.*"}});
+            std::string path = Platform::OpenFileDialog(window, Tr("Import .rml file", "Importar arquivo .rml"), {{Tr("RmlUi Files (*.rml)", "Arquivos RmlUi (*.rml)"), "*.rml"}, {Tr("All Files (*.*)", "Todos (*.*)"), "*.*"}});
             if (!path.empty()) {
                 RmlDocument loaded;
                 std::string err;
@@ -4768,15 +4990,15 @@ struct StudioUI::Impl {
                     if (auto* fn = ui_doc->GetElementById("menu-filename")) {
                         fn->SetInnerRML(EscapeXml(fs::path(path).filename().string()));
                     }
-                    if (auto* st = ui_doc->GetElementById("saved-text")) st->SetInnerRML("Salvo");
+                    SetSavedState(false);
                     FitViewport();
                     SyncUIFromDoc(true);
                     ApplyPanelSizes(win_w, win_h);
-                    ShowToast("Arquivo .RML importado");
+                    has_custom_filename = true;
                 }
             }
         } else if (action == "import_rcss") {
-            std::string path = Platform::OpenFileDialog(window, "Importar arquivo .rcss", {{"Estilos RmlUi (*.rcss;*.css)", "*.rcss;*.css"}, {"Todos (*.*)", "*.*"}});
+            std::string path = Platform::OpenFileDialog(window, Tr("Import .rcss file", "Importar arquivo .rcss"), {{Tr("RmlUi Styles (*.rcss;*.css)", "Estilos RmlUi (*.rcss;*.css)"), "*.rcss;*.css"}, {Tr("All Files (*.*)", "Todos (*.*)"), "*.*"}});
             if (!path.empty()) {
                 ExecuteImportRcss(path);
             }
@@ -4811,7 +5033,7 @@ struct StudioUI::Impl {
             snap_guides = !snap_guides;
             if (!snap_guides) active_guides.clear();
             UpdateHeaderButtonsUI();
-            ShowToast(snap_guides ? "Guias inteligentes ativadas" : "Guias inteligentes desativadas");
+            ShowToast(snap_guides ? Tr("Smart guides enabled", "Guias inteligentes ativadas") : Tr("Smart guides disabled", "Guias inteligentes desativadas"));
             return;
         } else if (action == "pick_swatch_grid") {
             OpenColorPicker(ColorTarget::NodeGrid, "swatch-grid");
@@ -4871,12 +5093,12 @@ struct StudioUI::Impl {
             }
             return;
         } else if (action == "export") {
-            std::string path = Platform::SaveFileDialog(window, "Exportar .rml + .rcss", "rml", {{"Arquivos RmlUi (*.rml)", "*.rml"}});
+            std::string path = Platform::SaveFileDialog(window, Tr("Export .rml + .rcss", "Exportar .rml + .rcss"), "rml", {{Tr("RmlUi Files (*.rml)", "Arquivos RmlUi (*.rml)"), "*.rml"}});
             if (!path.empty()) {
                 std::string err;
                 if (doc->ExportToPath(path, err)) {
-                    if (auto* st = ui_doc->GetElementById("saved-text")) st->SetInnerRML("Salvo");
-                    ShowToast("Pacote .RML + .RCSS exportado");
+                    SetSavedState(false);
+                    ShowToast(Tr(".RML + .RCSS bundle exported", "Pacote .RML + .RCSS exportado"));
                 }
             }
         } else if (action == "undo") {
@@ -4955,9 +5177,9 @@ struct StudioUI::Impl {
             drag_mode = DragMode::None;
             overlay_dirty = true;
             if (auto* b = ui_doc->GetElementById("btn-play")) b->SetClass("btn-play-on", play_mode);
-            if (auto* lbl = ui_doc->GetElementById("lbl-play")) lbl->SetInnerRML(play_mode ? "Parar" : "Pr&#233;-visualizar");
+            if (auto* lbl = ui_doc->GetElementById("lbl-play")) lbl->SetInnerRML(play_mode ? Tr("Stop", "Parar") : Tr("Preview", "Pr&#233;-visualizar"));
             if (auto* ico = ui_doc->GetElementById("ico-play")) ico->SetAttribute("src", play_mode ? "studio_ico_stop" : "studio_ico_play");
-            ShowToast(play_mode ? "PrÃ©-visualizaÃ§Ã£o iniciada" : "Modo editor restaurado");
+            ShowToast(play_mode ? Tr("Preview started", "Pré-visualização iniciada") : Tr("Editor mode restored", "Modo editor restaurado"));
         } else if (action == "tool_sel") {
             hand_tool = false;
         } else if (action == "tool_pan") {
@@ -4978,21 +5200,21 @@ struct StudioUI::Impl {
                 cur_code = (code_tab == "RCSS") ? rcss : rml;
             }
             Platform::CopyToClipboard(window, cur_code);
-            ShowToast(code_tab + " copiado para a Ã¡rea de transferÃªncia");
+            ShowToast(code_tab + Tr(" copied to clipboard", " copiado para a \xC3\xA1rea de transferência"));
             return;
         } else if (action == "copy_rml") {
             std::string rml, rcss;
             std::vector<RmlAsset> assets;
             doc->GenerateRmlAndRcss(rml, rcss, assets);
             Platform::CopyToClipboard(window, rml);
-            ShowToast("RML copiado para a Ã¡rea de transferÃªncia");
+            ShowToast(Tr("RML copied to clipboard", "RML copiado para a \xC3\xA1rea de transferência"));
             return;
         } else if (action == "copy_rcss") {
             std::string rml, rcss;
             std::vector<RmlAsset> assets;
             doc->GenerateRmlAndRcss(rml, rcss, assets);
             Platform::CopyToClipboard(window, rcss);
-            ShowToast("RCSS copiado para a Ã¡rea de transferÃªncia");
+            ShowToast(Tr("RCSS copied to clipboard", "RCSS copiado para a \xC3\xA1rea de transferência"));
             return;
         } else if (action == "u_px" || action == "u_pct" || action == "u_dp") {
             unit_mode = (action == "u_pct") ? "%" : (action == "u_dp" ? "dp" : "px");
@@ -5150,7 +5372,7 @@ struct StudioUI::Impl {
             doc->AddButton(panel, "Entrar", 150.0f, 260.0f, 200.0f, 48.0f);
             SetSingleSelection(panel);
             doc->Touch();
-            ShowToast("Template Login adicionado ao canvas");
+            ShowToast(Tr("Login template added to canvas", "Template Login adicionado ao canvas"));
         } else if (action == "add_div" || action == "pref_flex") {
             PushUndo();
             int pid = ResolveTargetContainer();
@@ -5167,37 +5389,37 @@ struct StudioUI::Impl {
                 }
             }
             doc->Touch();
-            ShowToast("Elemento adicionado ao canvas");
+            ShowToast(Tr("Element added to canvas", "Elemento adicionado ao canvas"));
         } else if (action == "add_txt") {
             PushUndo();
             int pid = ResolveTargetContainer();
             float ox = (pid == doc->root_id) ? 160.0f : 20.0f;
             float oy = (pid == doc->root_id) ? 160.0f : 20.0f;
             SetSingleSelection(doc->AddText(pid, "Texto RmlUi", ox, oy, 220.0f, 32.0f));
-            ShowToast("Texto adicionado ao canvas");
+            ShowToast(Tr("Text added to canvas", "Texto adicionado ao canvas"));
         } else if (action == "add_btn" || action == "pref_btn") {
             PushUndo();
             int pid = ResolveTargetContainer();
             float ox = (pid == doc->root_id) ? 160.0f : 20.0f;
             float oy = (pid == doc->root_id) ? 200.0f : 20.0f;
             SetSingleSelection(doc->AddButton(pid, "Botao", ox, oy, 180.0f, 40.0f));
-            ShowToast("BotÃ£o adicionado ao canvas");
+            ShowToast(Tr("Button added to canvas", "Botão adicionado ao canvas"));
         } else if (action == "add_inp" || action == "pref_inp") {
             PushUndo();
             int pid = ResolveTargetContainer();
             float ox = (pid == doc->root_id) ? 160.0f : 20.0f;
             float oy = (pid == doc->root_id) ? 250.0f : 70.0f;
             SetSingleSelection(doc->AddInput(pid, "Digite aqui...", ox, oy, 260.0f, 36.0f));
-            ShowToast("Input adicionado ao canvas");
+            ShowToast(Tr("Input added to canvas", "Input adicionado ao canvas"));
         } else if (action == "add_img") {
-            std::string path = Platform::OpenFileDialog(window, "Selecionar Imagem", {{"Imagens (*.png;*.jpg;*.jpeg;*.bmp)", "*.png;*.jpg;*.jpeg;*.bmp"}, {"Todos (*.*)", "*.*"}});
+            std::string path = Platform::OpenFileDialog(window, Tr("Select Image", "Selecionar Imagem"), {{Tr("Images (*.png;*.jpg;*.jpeg;*.bmp)", "Imagens (*.png;*.jpg;*.jpeg;*.bmp)"), "*.png;*.jpg;*.jpeg;*.bmp"}, {Tr("All Files (*.*)", "Todos (*.*)"), "*.*"}});
             if (!path.empty()) {
                 PushUndo();
                 int pid = ResolveTargetContainer();
                 float ox = (pid == doc->root_id) ? 180.0f : 20.0f;
                 float oy = (pid == doc->root_id) ? 180.0f : 20.0f;
                 SetSingleSelection(doc->AddImage(pid, fs::path(path).filename().string(), ReadFileBytes(path), ox, oy, 220.0f, 140.0f));
-                ShowToast("Imagem adicionada ao canvas");
+                ShowToast(Tr("Image added to canvas", "Imagem adicionada ao canvas"));
             }
         } else if (action == "add_bar" || action == "pref_bar") {
             PushUndo();
@@ -5218,7 +5440,7 @@ struct StudioUI::Impl {
             }
             SetSingleSelection(bar);
             doc->Touch();
-            ShowToast("Barra adicionada ao canvas");
+            ShowToast(Tr("Progress bar added to canvas", "Barra adicionada ao canvas"));
         } else if (action == "pref_list") {
             PushUndo();
             int pid = ResolveTargetContainer();
@@ -5238,7 +5460,7 @@ struct StudioUI::Impl {
             }
             SetSingleSelection(list_id);
             doc->Touch();
-            ShowToast("Lista adicionada ao canvas");
+            ShowToast(Tr("List added to canvas", "Lista adicionada ao canvas"));
         } else if (action == "pref_grid") {
             PushUndo();
             int pid = ResolveTargetContainer();
@@ -5262,10 +5484,10 @@ struct StudioUI::Impl {
             }
             SetSingleSelection(grid_id);
             doc->Touch();
-            ShowToast("Grid adicionada ao canvas");
+            ShowToast(Tr("Grid added to canvas", "Grid adicionada ao canvas"));
         } else if (action == "pick_img") {
             if (auto* n = doc->FindNode(PrimaryId())) {
-                std::string path = Platform::OpenFileDialog(window, "Selecionar Imagem", {{"Imagens (*.png;*.jpg;*.jpeg;*.bmp)", "*.png;*.jpg;*.jpeg;*.bmp"}, {"Todos (*.*)", "*.*"}});
+                std::string path = Platform::OpenFileDialog(window, Tr("Select Image", "Selecionar Imagem"), {{Tr("Images (*.png;*.jpg;*.jpeg;*.bmp)", "Imagens (*.png;*.jpg;*.jpeg;*.bmp)"), "*.png;*.jpg;*.jpeg;*.bmp"}, {Tr("All Files (*.*)", "Todos (*.*)"), "*.*"}});
                 if (!path.empty()) {
                     PushUndo();
                     n->image_bytes = ReadFileBytes(path);
@@ -5311,7 +5533,7 @@ struct StudioUI::Impl {
             dot->SetClass("dot-amber-sm", !synced);
         }
         if (auto* txt = ui_doc->GetElementById("code-status-text")) {
-            txt->SetInnerRML(EscapeXml(label_override.empty() ? (synced ? "Sincronizado" : "Sintaxe pendente...") : label_override));
+            txt->SetInnerRML(EscapeXml(label_override.empty() ? (synced ? Tr("Synced", "Sincronizado") : Tr("Pending syntax...", "Sintaxe pendente...")) : label_override));
         }
     }
 
@@ -5470,7 +5692,7 @@ struct StudioUI::Impl {
                 ? engine->ApplyRcssStringAndSync(code, *doc, err)
                 : engine->ApplyRmlStringAndSync(code, *doc, err);
 
-            UpdateCodeStatusIndicator(ok, ok ? "Sincronizado" : (err.empty() ? "Sintaxe pendente..." : err));
+            UpdateCodeStatusIndicator(ok, ok ? Tr("Synced", "Sincronizado") : (err.empty() ? Tr("Pending syntax...", "Sintaxe pendente...") : err));
             SyncCodeGutter(true);
             if (ok) {
                 if (code_tab == "RML") {
@@ -5923,15 +6145,15 @@ struct StudioUI::Impl {
             }
             if (auto* sub = ui_doc->GetElementById("insp-node-sub")) {
                 std::string stxt = (selected_ids.size() > 1)
-                    ? (std::to_string(selected_ids.size()) + " elementos selecionados")
-                    : ("&lt;" + EscapeXml(n->tag) + "&gt; selecionado");
+                    ? (std::to_string(selected_ids.size()) + " " + Tr("elements selected", "elementos selecionados"))
+                    : ("&lt;" + EscapeXml(n->tag) + "&gt; " + Tr("selected", "selecionado"));
                 sub->SetInnerRML(stxt);
             }
 
             SetInputValue("prop-id", n->rml_id.empty() ? n->name : n->rml_id);
             SetInputValue("prop-class", n->rml_class);
             if (auto* vis = ui_doc->GetElementById("prop-visible")) vis->SetClass("on", n->visible);
-            if (auto* b = ui_doc->GetElementById("lbl-lock")) b->SetInnerRML(n->locked ? "Destravar" : "Bloquear");
+            if (auto* b = ui_doc->GetElementById("lbl-lock")) b->SetInnerRML(n->locked ? Tr("Unlock", "Destravar") : Tr("Lock", "Bloquear"));
 
             float pw = (float)doc->screen_width;
             float ph = (float)doc->screen_height;
@@ -6101,6 +6323,7 @@ bool StudioUI::Init(GLFWwindow* window, RmlDocument& doc, RmlEngineHost& engine)
     impl_->BindButton("m-edit", "menu_edit");
     impl_->BindButton("m-view", "menu_view");
     impl_->BindButton("m-vp", "menu_vp");
+    impl_->BindButton("btn-lang", "toggle_lang");
     impl_->BindButton("btn-help", "help");
     impl_->BindButton("btn-settings", "settings");
 
@@ -6245,6 +6468,7 @@ bool StudioUI::Init(GLFWwindow* window, RmlDocument& doc, RmlEngineHost& engine)
     impl_->BindChange("prop-src", "src");
 
     impl_->SetSingleSelection(doc.root_id);
+    impl_->ApplyLanguage();
     impl_->ApplyPanelSizes();
     impl_->FitViewport();
     impl_->SyncUIFromDoc(true);
@@ -6448,6 +6672,11 @@ void StudioUI::OnMouseButton(int button, bool down) {
         }
     }
 
+    if (!down && impl_->panning) {
+        impl_->panning = false;
+        return;
+    }
+
     if (button == 2 || (button == 0 && (impl_->space_down || impl_->hand_tool))) {
         if (down && impl_->IsPointInCanvasViewport(x, y)) {
             impl_->panning = true;
@@ -6455,11 +6684,7 @@ void StudioUI::OnMouseButton(int button, bool down) {
             impl_->pan_start_my = y;
             impl_->pan_start_x = impl_->pan_x;
             impl_->pan_start_y = impl_->pan_y;
-                        return;
-        }
-        if (!down && impl_->panning) {
-            impl_->panning = false;
-                        return;
+            return;
         }
     }
 

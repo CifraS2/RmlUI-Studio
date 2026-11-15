@@ -70,7 +70,7 @@ int main(int, char**) {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 #endif
 
-    GLFWwindow* window = glfwCreateWindow(1440, 860, "RmlUI Studio - Editor de interfaces", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1440, 860, "RmlUI Studio", nullptr, nullptr);
     if (!window) {
         std::fprintf(stderr, "Failed to create GLFW window (OpenGL 3.3 Core).\n");
         glfwTerminate();
