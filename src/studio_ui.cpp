@@ -3146,7 +3146,7 @@ const char* kEditorRml = R"RML(<rml>
         </div>
         <div class="status-grp">
             <span>RmlUI Studio</span>
-            <span class="version-tag">v1.0</span>
+            <span class="version-tag">v1.1.0</span>
         </div>
     </div>
 
