@@ -55,7 +55,7 @@ Visual UI editor for **RmlUi** (Figma-style), built with **C++17**, **RmlUi**, *
 
 ### Build
 ```sh
-git clone --recursive https://github.com/<your-username>/RmlUI-Studio.git
+git clone --recursive https://github.com/CifraS2/RmlUI-Studio
 cd RmlUI-Studio
 cmake -B build
 cmake --build build --config Release

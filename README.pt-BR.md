@@ -55,7 +55,7 @@ O **RmlUI Studio** usa o próprio **RmlUi** tanto para renderizar o documento do
 
 ### Build
 ```sh
-git clone --recursive https://github.com/<seu-usuario>/RmlUI-Studio.git
+git clone --recursive https://github.com/CifraS2/RmlUI-Studio
 cd RmlUI-Studio
 cmake -B build
 cmake --build build --config Release
