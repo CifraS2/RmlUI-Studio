@@ -2,7 +2,7 @@
 
 > 🇺🇸 **English** | 🇧🇷 [Português (Brasil)](README.pt-BR.md)
 
-Visual UI editor for **RmlUi** (Figma-style), built with **C++17**, **RmlUi**, **FreeType**, and **DirectX 11** for Windows.
+Visual UI editor for **RmlUi**, built with **C++17**, **RmlUi**, **FreeType**, and **DirectX 11** for Windows.
 
 ![RmlUI Studio Demo](assets/preview.png)
 
