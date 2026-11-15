@@ -1,77 +1,81 @@
 # RmlUI Studio
 
-Editor visual de interfaces para **RmlUi** (estilo Figma), construído em **C++17**, **RmlUi**, **FreeType** e **DirectX 11** para Windows.
+> 🇺🇸 **English** | 🇧🇷 [Português (Brasil)](README.pt-BR.md)
 
-![Demonstração do RmlUI Studio](assets/preview.png)
+Visual UI editor for **RmlUi** (Figma-style), built with **C++17**, **RmlUi**, **FreeType**, and **DirectX 11** for Windows.
 
----
-
-## Como o projeto funciona
-
-O **RmlUI Studio** usa o próprio **RmlUi** tanto para renderizar o documento do usuário quanto para desenhar a interface do editor, sobre um backend **DirectX 11** nativo no Windows:
-
-### 1. Arquitetura de Dois Contextos (`RmlEngineHost` — `src/rml_engine.h`)
-- **Contexto do Canvas (`CanvasContext`):** Renderiza o documento `.rml`/`.rcss` do usuário em uma textura *RenderTarget* na GPU (`ID3D11ShaderResourceView`), permitindo zoom, pan, seleção direta de elementos (*hit-testing* no DOM real do RmlUi), manipulação visual e interação ao vivo.
-- **Contexto do Editor (`EditorContext`):** Renderiza toda a interface do estúdio (painéis, árvore de camadas, inspetor de propriedades e barra de ferramentas) diretamente no *backbuffer* via RmlUi, sem dependência de ImGui.
-
-### 2. Modelo de Documento e Geração de RML/RCSS (`RmlDocument` — `src/rml_doc.h`)
-- **Árvore de nós (`RmlNode`):** Representa elementos RmlUi (`div`, `button`, `input`, `span`, `img`, `progress`) com propriedades de:
-  - **Geometria e Layout:** posição, dimensões, *Flexbox* (`display: flex`, `flex-direction`, `justify-content`, `align-items`, `flex-wrap`, `gap`, `padding`), modos de dimensionamento (`Fixed`, `Hug`, `Fill`), âncoras/constraints e grades visuais (*Layout Grids*: colunas, linhas ou grade uniforme).
-  - **Aparência e Tipografia:** cor de fundo, bordas, `border-radius`, opacidade, cor/tamanho/peso/alinhamento de texto e estados `:hover`.
-  - **Assets:** suporte a imagens (`<img>`) com resolução relativa ao diretório base do projeto.
-- **Importação e Sincronização ao Vivo:**
-  - Importa arquivos `.rml` e `.rcss` existentes diretamente pelo DOM do RmlUi (`ImportRmlFile`, `ImportRcssAndSync`).
-  - Aplica alterações de código `.rml` e `.rcss` em tempo real no canvas (`ApplyRmlStringAndSync`, `ApplyRcssStringAndSync`), com sanitização de RCSS para compatibilidade com o RmlUi (`SanitizeRcssForRmlUi`).
-  - Exporta o projeto de volta para `.rml`, `.rcss` e assets (`GenerateRmlAndRcss`, `ExportToPath`).
-
-### 3. Renderização DirectX 11 e Ícones (`Dx11Renderer2D` / `studio_icons`)
-- **`src/dx11_renderer.h` / `.cpp`:** Backend 2D em DirectX 11 (`d3d11`, `dxgi`, `d3dcompiler`, `windowscodecs`) responsável por exibir a textura do canvas, desenhar *overlays* de seleção, contornos tracejados e guias visuais.
-- **`src/studio_icons.h` / `.cpp`:** Gera ícones vetoriais 32×32 RGBA pré-multiplicados diretamente em código, coloridos dinamicamente pelo RmlUi via `image-color`.
+![RmlUI Studio Demo](assets/preview.png)
 
 ---
 
-## Estrutura Principal
+## How It Works
 
-- `CMakeLists.txt` — Configuração CMake (C++17, FreeType estático, RmlUi Core estático e executável `RmlUIStudio`).
-- `src/main.cpp` — Inicialização da janela Win32, dispositivo DirectX 11, *swap chain* e loop principal.
-- `src/rml_doc.h` / `.cpp` — Modelo de documento, nós, constraints, importação/exportação `.rml` e `.rcss`.
-- `src/rml_engine.h` / `.cpp` — Integração com o RmlUi (contextos de Canvas e Editor, DOM e renderização em textura DX11).
-- `src/dx11_renderer.h` / `.cpp` — Renderizador 2D DirectX 11 e gerenciamento de texturas.
-- `src/studio_ui.h` / `.cpp` — Lógica da interface do estúdio, interação com canvas, painéis e inspetor.
-- `src/studio_icons.h` / `.cpp` — Ícones vetoriais gerados em código.
-- `third_party/RmlUi/` — Biblioteca RmlUi (subprojeto estático).
-- `third_party/freetype/` — Biblioteca FreeType (motor de fontes estático para o RmlUi).
+**RmlUI Studio** uses **RmlUi** itself both to render the user's document and to draw the editor's own interface on top of a native **DirectX 11** backend on Windows:
+
+### 1. Dual-Context Architecture (`RmlEngineHost` — `src/rml_engine.h`)
+- **Canvas Context (`CanvasContext`):** Renders the user's `.rml`/`.rcss` document into a GPU *RenderTarget* texture (`ID3D11ShaderResourceView`), enabling zoom, pan, direct element selection (real RmlUi DOM *hit-testing*), visual manipulation, and live interaction.
+- **Editor Context (`EditorContext`):** Renders the entire studio interface (panels, layer tree, property inspector, and toolbar) directly to the *backbuffer* via RmlUi, with no ImGui dependency.
+
+### 2. Document Model & RML/RCSS Generation (`RmlDocument` — `src/rml_doc.h`)
+- **Node Tree (`RmlNode`):** Represents RmlUi elements (`div`, `button`, `input`, `span`, `img`, `progress`) with properties for:
+  - **Geometry & Layout:** position, dimensions, *Flexbox* (`display: flex`, `flex-direction`, `justify-content`, `align-items`, `flex-wrap`, `gap`, `padding`), sizing modes (`Fixed`, `Hug`, `Fill`), anchors/constraints, and visual *Layout Grids* (columns, rows, or uniform grid).
+  - **Appearance & Typography:** background color, borders, `border-radius`, opacity, text color/size/weight/alignment, and `:hover` states.
+  - **Assets:** image support (`<img>`) with paths resolved relative to the project base directory.
+- **Live Import & Synchronization:**
+  - Imports existing `.rml` and `.rcss` files directly through the RmlUi DOM (`ImportRmlFile`, `ImportRcssAndSync`).
+  - Applies `.rml` and `.rcss` code edits in real time on the canvas (`ApplyRmlStringAndSync`, `ApplyRcssStringAndSync`), with RCSS sanitization for RmlUi compatibility (`SanitizeRcssForRmlUi`).
+  - Exports the project back to `.rml`, `.rcss`, and assets (`GenerateRmlAndRcss`, `ExportToPath`).
+
+### 3. DirectX 11 Rendering & Icons (`Dx11Renderer2D` / `studio_icons`)
+- **`src/dx11_renderer.h` / `.cpp`:** DirectX 11 2D backend (`d3d11`, `dxgi`, `d3dcompiler`, `windowscodecs`) responsible for displaying the canvas texture and drawing selection *overlays*, dashed outlines, and visual guides.
+- **`src/studio_icons.h` / `.cpp`:** Generates premultiplied 32×32 RGBA vector icons directly in code, dynamically tinted by RmlUi via `image-color`.
 
 ---
 
-## Como Compilar (Windows)
+## Project Structure
 
-### Pré-requisitos
-- **Windows** (API Win32 e DirectX 11)
-- **CMake** 3.20 ou superior
-- **Compilador C++17** (ex.: Visual Studio / MSVC) com Windows SDK
+- `CMakeLists.txt` — CMake configuration (C++17, static FreeType, static RmlUi Core, and `RmlUIStudio` executable).
+- `src/main.cpp` — Win32 window initialization, DirectX 11 device, *swap chain*, and main loop.
+- `src/rml_doc.h` / `.cpp` — Document model, nodes, constraints, and `.rml`/`.rcss` import/export.
+- `src/rml_engine.h` / `.cpp` — RmlUi integration (Canvas and Editor contexts, DOM, and DX11 texture rendering).
+- `src/dx11_renderer.h` / `.cpp` — DirectX 11 2D renderer and texture management.
+- `src/studio_ui.h` / `.cpp` — Studio UI logic, canvas interaction, panels, and inspector.
+- `src/studio_icons.h` / `.cpp` — Code-generated vector icons.
+- `third_party/RmlUi/` — RmlUi library (static subproject).
+- `third_party/freetype/` — FreeType library (static font engine for RmlUi).
+
+---
+
+## Building (Windows)
+
+### Prerequisites
+- **Windows** (Win32 API & DirectX 11)
+- **CMake** 3.20 or higher
+- **C++17 compiler** (e.g., Visual Studio / MSVC) with Windows SDK
 
 ### Build
 ```sh
+git clone --recursive https://github.com/<your-username>/RmlUI-Studio.git
+cd RmlUI-Studio
 cmake -B build
 cmake --build build --config Release
 ```
 
 ---
 
-## Créditos e Bibliotecas
+## Credits & Libraries
 
-Este projeto utiliza as seguintes bibliotecas e APIs:
+This project uses the following libraries and APIs:
 
-1. **RmlUi — The RmlUi Team & Contribuidores**
+1. **RmlUi — The RmlUi Team & Contributors**
    - Copyright (c) 2008–2014 CodePoint Ltd, Shift Technology Ltd, and contributors
    - Copyright (c) 2019–2026 The RmlUi Team, and contributors
-   - Motor de interface HTML/CSS-like utilizado tanto no canvas quanto na UI do editor (`third_party/RmlUi/`).
-   - Licença: **MIT** ([`third_party/RmlUi/LICENSE.txt`](third_party/RmlUi/LICENSE.txt)).
+   - HTML/CSS-like UI engine used for both the canvas and the editor UI (`third_party/RmlUi/`).
+   - License: **MIT** ([`third_party/RmlUi/LICENSE.txt`](third_party/RmlUi/LICENSE.txt)).
 
 2. **FreeType 2 — The FreeType Project**
-   - Motor de rasterização de fontes utilizado pelo RmlUi (`third_party/freetype/`).
-   - Licença: **FreeType License (FTL)** ou **GPLv2** ([`third_party/freetype/LICENSE.TXT`](third_party/freetype/LICENSE.TXT); utilizado sob a **FTL**).
+   - Font rasterization engine used by RmlUi (`third_party/freetype/`).
+   - License: **FreeType License (FTL)** or **GPLv2** ([`third_party/freetype/LICENSE.TXT`](third_party/freetype/LICENSE.TXT); used under **FTL**).
 
 3. **Microsoft Windows SDK / DirectX 11**
-   - APIs gráficas e de sistema do Windows utilizadas pelo backend (`d3d11`, `dxgi`, `d3dcompiler`, `windowscodecs`, `dwmapi`, `comdlg32`, `ole32`, `user32`, `shell32`).
+   - Windows system and graphics APIs used by the backend (`d3d11`, `dxgi`, `d3dcompiler`, `windowscodecs`, `dwmapi`, `comdlg32`, `ole32`, `user32`, `shell32`).
