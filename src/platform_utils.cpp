@@ -104,7 +104,28 @@ void ApplyDarkTitlebar(GLFWwindow* window) {
 
 #include <cstdlib>
 
+#if defined(__linux__) && defined(__has_include)
+#if __has_include(<X11/Xlib.h>) && __has_include(<X11/extensions/Xrandr.h>)
+#define STUDIO_HAVE_GLFW_X11 1
+#define GLFW_EXPOSE_NATIVE_X11
+#include <GLFW/glfw3native.h>
+#endif
+#endif
+
 namespace {
+
+unsigned long GetX11WindowId(GLFWwindow* owner) {
+#if defined(STUDIO_HAVE_GLFW_X11)
+    if (!owner) return 0;
+#ifdef GLFW_PLATFORM_X11
+    if (glfwGetPlatform() != GLFW_PLATFORM_X11) return 0;
+#endif
+    return static_cast<unsigned long>(glfwGetX11Window(owner));
+#else
+    (void)owner;
+    return 0;
+#endif
+}
 
 std::string ShellQuote(const std::string& s) {
     std::string out = "'";
@@ -166,25 +187,35 @@ std::string BuildKdialogFilter(const std::vector<Platform::FileFilter>& filters)
 
 namespace Platform {
 
-std::string OpenFileDialog(GLFWwindow* /*owner*/, const std::string& title, const std::vector<FileFilter>& filters) {
+std::string OpenFileDialog(GLFWwindow* owner, const std::string& title, const std::vector<FileFilter>& filters) {
+    unsigned long xwin = GetX11WindowId(owner);
     if (HasCommand("zenity")) {
-        std::string cmd = "zenity --file-selection --title=" + ShellQuote(title) + BuildZenityFilters(filters) + " 2>/dev/null";
+        std::string cmd;
+        if (xwin != 0) cmd += "WINDOWID=" + std::to_string(xwin) + " ";
+        cmd += "zenity --file-selection --title=" + ShellQuote(title) + BuildZenityFilters(filters) + " 2>/dev/null";
         return RunCommandOutput(cmd);
     }
     if (HasCommand("kdialog")) {
-        std::string cmd = "kdialog --getopenfilename . " + ShellQuote(BuildKdialogFilter(filters)) + " --title " + ShellQuote(title) + " 2>/dev/null";
+        std::string cmd = "kdialog --getopenfilename . " + ShellQuote(BuildKdialogFilter(filters)) + " --title " + ShellQuote(title);
+        if (xwin != 0) cmd += " --attach " + std::to_string(xwin);
+        cmd += " 2>/dev/null";
         return RunCommandOutput(cmd);
     }
     return {};
 }
 
-std::string SaveFileDialog(GLFWwindow* /*owner*/, const std::string& title, const std::string& default_ext, const std::vector<FileFilter>& filters) {
+std::string SaveFileDialog(GLFWwindow* owner, const std::string& title, const std::string& default_ext, const std::vector<FileFilter>& filters) {
+    unsigned long xwin = GetX11WindowId(owner);
     std::string result;
     if (HasCommand("zenity")) {
-        std::string cmd = "zenity --file-selection --save --confirm-overwrite --title=" + ShellQuote(title) + BuildZenityFilters(filters) + " 2>/dev/null";
+        std::string cmd;
+        if (xwin != 0) cmd += "WINDOWID=" + std::to_string(xwin) + " ";
+        cmd += "zenity --file-selection --save --confirm-overwrite --title=" + ShellQuote(title) + BuildZenityFilters(filters) + " 2>/dev/null";
         result = RunCommandOutput(cmd);
     } else if (HasCommand("kdialog")) {
-        std::string cmd = "kdialog --getsavefilename . " + ShellQuote(BuildKdialogFilter(filters)) + " --title " + ShellQuote(title) + " 2>/dev/null";
+        std::string cmd = "kdialog --getsavefilename . " + ShellQuote(BuildKdialogFilter(filters)) + " --title " + ShellQuote(title);
+        if (xwin != 0) cmd += " --attach " + std::to_string(xwin);
+        cmd += " 2>/dev/null";
         result = RunCommandOutput(cmd);
     }
     if (!result.empty() && !default_ext.empty()) {

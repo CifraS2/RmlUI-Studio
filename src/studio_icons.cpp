@@ -129,6 +129,14 @@ float SampleIcon(const std::string& name, float x, float y) {
         add(Fill(SdCircle(x, y, 12.0f, 16.9f, 1.05f)));
         return a;
     }
+    if (name == "alert") {
+        add(Line(SdSegment(x, y, 12.0f, 4.0f, 3.8f, 19.2f), 0.92f));
+        add(Line(SdSegment(x, y, 3.8f, 19.2f, 20.2f, 19.2f), 0.92f));
+        add(Line(SdSegment(x, y, 20.2f, 19.2f, 12.0f, 4.0f), 0.92f));
+        add(Line(SdSegment(x, y, 12.0f, 9.5f, 12.0f, 13.8f), 0.92f));
+        add(Fill(SdCircle(x, y, 12.0f, 16.6f, 0.98f)));
+        return a;
+    }
     if (name == "settings") {
         // Horizontal slider tracks (Settings2 style)
         add(Line(SdSegment(x, y, 4.0f, 7.5f, 14.0f, 7.5f), 0.88f));

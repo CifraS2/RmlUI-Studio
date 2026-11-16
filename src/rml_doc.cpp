@@ -91,7 +91,45 @@ std::string fmt_px(float v) {
     return std::string(buf);
 }
 
+std::string fmt_unit_val(float v, const char* suffix) {
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "%.2f%s", v, suffix);
+    return std::string(buf);
+}
+
 } // namespace
+
+std::string FormatRmlLength(float px_val, float ref_dim_px, RmlCssUnit unit, float em_base_px, float dp_ratio) {
+    switch (unit) {
+        case RmlCssUnit::Percent:
+            if (ref_dim_px > 1.0f) return fmt_pct((px_val / ref_dim_px) * 100.0f);
+            return fmt_px(px_val);
+        case RmlCssUnit::Dp:
+            return fmt_unit_val(px_val / std::max(0.01f, dp_ratio), "dp");
+        case RmlCssUnit::Em:
+            return fmt_unit_val(px_val / std::max(1.0f, em_base_px), "em");
+        case RmlCssUnit::Px:
+        default:
+            return fmt_px(px_val);
+    }
+}
+
+std::string RmlNode::DefaultDisplayName(size_t max_text_bytes) const {
+    if (!rml_id.empty()) return "#" + rml_id;
+    const std::string& txt_preview = !text.empty() ? text : placeholder;
+    if (!txt_preview.empty()) {
+        if (txt_preview.size() <= max_text_bytes) return txt_preview;
+        size_t len = max_text_bytes;
+        while (len > 0 && (static_cast<unsigned char>(txt_preview[len]) & 0xC0) == 0x80) {
+            --len;
+        }
+        return txt_preview.substr(0, len) + "...";
+    }
+    std::istringstream ss(rml_class);
+    std::string first_cls;
+    if (ss >> first_cls) return "." + first_cls;
+    return tag;
+}
 
 RmlDocument::RmlDocument() {
     ResetDefaultScreen();
@@ -99,6 +137,7 @@ RmlDocument::RmlDocument() {
 
 void RmlDocument::ResetDefaultScreen() {
     nodes.clear();
+    asset_cache.clear();
     next_id = 1;
     screen_width = 1920;
     screen_height = 1080;
@@ -195,6 +234,7 @@ int RmlDocument::AddDiv(int parent_id, const std::string& name, float x, float y
     n.y = y;
     n.width = w;
     n.height = h;
+    n.css_positioned = true;
     n.has_bg = true;
     n.bg_color = {32, 34, 42, 240};
     n.border_color = {64, 68, 82, 255};
@@ -203,6 +243,9 @@ int RmlDocument::AddDiv(int parent_id, const std::string& name, float x, float y
     int nid = n.id;
     nodes.push_back(std::move(n));
     if (auto* p = FindNode(parent_id)) {
+        if (p->display_flex && !p->is_body_root) {
+            nodes.back().pos_mode = RmlPositionMode::Relative;
+        }
         p->children.push_back(nid);
     }
     Touch();
@@ -221,6 +264,7 @@ int RmlDocument::AddButton(int parent_id, const std::string& label, float x, flo
     n.y = y;
     n.width = w;
     n.height = h;
+    n.css_positioned = true;
     n.text = label;
     n.has_bg = true;
     n.bg_color = {0, 122, 255, 255};
@@ -237,6 +281,9 @@ int RmlDocument::AddButton(int parent_id, const std::string& label, float x, flo
     int nid = n.id;
     nodes.push_back(std::move(n));
     if (auto* p = FindNode(parent_id)) {
+        if (p->display_flex && !p->is_body_root) {
+            nodes.back().pos_mode = RmlPositionMode::Relative;
+        }
         p->children.push_back(nid);
     }
     Touch();
@@ -255,6 +302,7 @@ int RmlDocument::AddInput(int parent_id, const std::string& placeholder, float x
     n.y = y;
     n.width = w;
     n.height = h;
+    n.css_positioned = true;
     n.placeholder = placeholder;
     n.has_bg = true;
     n.bg_color = {28, 28, 30, 255};
@@ -270,6 +318,9 @@ int RmlDocument::AddInput(int parent_id, const std::string& placeholder, float x
     int nid = n.id;
     nodes.push_back(std::move(n));
     if (auto* p = FindNode(parent_id)) {
+        if (p->display_flex && !p->is_body_root) {
+            nodes.back().pos_mode = RmlPositionMode::Relative;
+        }
         p->children.push_back(nid);
     }
     Touch();
@@ -288,6 +339,7 @@ int RmlDocument::AddText(int parent_id, const std::string& text, float x, float 
     n.y = y;
     n.width = w;
     n.height = h;
+    n.css_positioned = true;
     n.text = text;
     n.has_bg = false;
     n.text_color = {255, 255, 255, 255};
@@ -295,10 +347,37 @@ int RmlDocument::AddText(int parent_id, const std::string& text, float x, float 
     int nid = n.id;
     nodes.push_back(std::move(n));
     if (auto* p = FindNode(parent_id)) {
+        if (p->display_flex && !p->is_body_root) {
+            nodes.back().pos_mode = RmlPositionMode::Relative;
+        }
         p->children.push_back(nid);
     }
     Touch();
     return nid;
+}
+
+std::shared_ptr<const std::vector<uint8_t>> RmlDocument::CacheAssetBytes(const std::string& key, std::vector<uint8_t> bytes) {
+    if (key.empty() || bytes.empty()) return {};
+    auto it = asset_cache.find(key);
+    if (it != asset_cache.end() && it->second && *it->second == bytes) {
+        return it->second;
+    }
+    auto sp = std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
+    asset_cache[key] = sp;
+    return sp;
+}
+
+std::shared_ptr<const std::vector<uint8_t>> RmlDocument::FindCachedAsset(const std::string& key) const {
+    if (key.empty()) return {};
+    auto it = asset_cache.find(key);
+    return (it != asset_cache.end()) ? it->second : std::shared_ptr<const std::vector<uint8_t>>{};
+}
+
+void RmlDocument::SetNodeImageBytes(int node_id, const std::string& filename, std::vector<uint8_t> bytes) {
+    RmlNode* n = FindNode(node_id);
+    if (!n) return;
+    n->image_src = filename;
+    n->image_data = CacheAssetBytes(filename, std::move(bytes));
 }
 
 int RmlDocument::AddImage(
@@ -321,12 +400,16 @@ int RmlDocument::AddImage(
     n.y = y;
     n.width = w;
     n.height = h;
+    n.css_positioned = true;
     n.has_bg = false;
     n.image_src = filename;
-    n.image_bytes = bytes;
+    n.image_data = CacheAssetBytes(filename, bytes);
     int nid = n.id;
     nodes.push_back(std::move(n));
     if (auto* p = FindNode(parent_id)) {
+        if (p->display_flex && !p->is_body_root) {
+            nodes.back().pos_mode = RmlPositionMode::Relative;
+        }
         p->children.push_back(nid);
     }
     Touch();
@@ -437,6 +520,21 @@ bool RmlDocument::ReparentNode(int id, int new_parent_id) {
     return true;
 }
 
+bool RmlDocument::ReorderChildNode(int parent_id, int child_id, int new_index) {
+    RmlNode* parent = FindNode(parent_id);
+    if (!parent) return false;
+    auto& ch = parent->children;
+    auto it = std::find(ch.begin(), ch.end(), child_id);
+    if (it == ch.end()) return false;
+    int old_idx = static_cast<int>(it - ch.begin());
+    int clamped = std::clamp(new_index, 0, static_cast<int>(ch.size()) - 1);
+    if (clamped == old_idx) return false;
+    ch.erase(it);
+    ch.insert(ch.begin() + clamped, child_id);
+    Touch();
+    return true;
+}
+
 void RmlDocument::ApplyConstraintsOnParentResize(int parent_id, float old_w, float old_h, float new_w, float new_h) {
     if (old_w < 1.0f || old_h < 1.0f || new_w < 1.0f || new_h < 1.0f) return;
     if (std::fabs(old_w - new_w) < 0.01f && std::fabs(old_h - new_h) < 0.01f) return;
@@ -504,9 +602,11 @@ void RmlDocument::GenerateRmlAndRcss(
     std::string& out_rcss,
     std::vector<RmlAsset>& out_assets,
     const std::string& rcss_filename,
-    bool include_editor_ids
+    bool include_editor_ids,
+    std::unordered_map<int, std::string>* out_node_classes
 ) const {
     out_assets.clear();
+    if (out_node_classes) out_node_classes->clear();
     std::ostringstream rml_body;
     std::ostringstream rcss;
 
@@ -514,11 +614,27 @@ void RmlDocument::GenerateRmlAndRcss(
     const float sh = static_cast<float>(std::max(1, screen_height));
 
     if (has_imported_source) {
-        // Preserva 100% do RCSS original importado (sanitizado para RmlUi) e anexa overrides editados
-        std::string clean_imported = SanitizeRcssForRmlUi(imported_raw_rcss);
-        rcss << clean_imported;
-        if (!clean_imported.empty() && clean_imported.back() != '\n') rcss << "\n";
+        // Exportacao/Code Dock (include_editor_ids=false) preserva imported_raw_rcss intacto (sem BOM);
+        // somente a copia enviada ao VFS do canvas_ctx (include_editor_ids=true) recebe SanitizeRcssForRmlUi.
+        std::string imported_base = include_editor_ids
+            ? SanitizeRcssForRmlUi(imported_raw_rcss)
+            : StripUtf8Bom(imported_raw_rcss);
+        rcss << imported_base;
+        if (!imported_base.empty() && imported_base.back() != '\n') rcss << "\n";
         std::ostringstream overrides;
+
+        std::unordered_set<int> force_relative_parents;
+        for (const auto& c : nodes) {
+            if (c.is_body_root || !c.visible) continue;
+            if (c.pos_mode == RmlPositionMode::Absolute && (!c.from_import || c.modified_transform)) {
+                if (const RmlNode* par = FindNode(c.parent_id)) {
+                    if (!par->is_body_root && !par->display_flex &&
+                        par->pos_mode == RmlPositionMode::Static) {
+                        force_relative_parents.insert(par->id);
+                    }
+                }
+            }
+        }
 
         std::function<void(int, int)> emit_imported = [&](int id, int depth) {
             const RmlNode* n = FindNode(id);
@@ -530,64 +646,138 @@ void RmlDocument::GenerateRmlAndRcss(
             }
 
             std::string indent(static_cast<size_t>(depth) * 2 + 4, ' ');
-            bool need_override = (!n->from_import || n->modified_transform || n->modified_style || !n->visible);
+            bool force_rel_parent = (force_relative_parents.count(n->id) > 0);
+            bool need_override = (!n->from_import || n->modified_transform || n->modified_style || !n->visible || force_rel_parent);
             std::string ov_cls = "fc-n" + std::to_string(n->id);
 
+            auto has_class_tok = [](const std::string& cls_str, const std::string& tok) {
+                std::istringstream ss(cls_str);
+                std::string cur;
+                while (ss >> cur) {
+                    if (cur == tok) return true;
+                }
+                return false;
+            };
+
             std::string cls_val = n->rml_class;
-            if (need_override) {
+            if (need_override && !has_class_tok(cls_val, ov_cls)) {
                 if (!cls_val.empty()) cls_val += " ";
                 cls_val += ov_cls;
             }
+            if (out_node_classes) (*out_node_classes)[n->id] = cls_val;
 
             if (need_override) {
                 const RmlNode* par = FindNode(n->parent_id);
                 bool in_flex = (par && par->display_flex && !par->is_body_root);
                 float pw = (par && par->width > 1.0f) ? par->width : sw;
                 float ph = (par && par->height > 1.0f) ? par->height : sh;
-                std::string sel = !n->rml_id.empty() ? ("#" + sanitize_class(n->rml_id)) : ("." + ov_cls);
+                // Low-specificity class selector so original :hover / :active / :focus rules keep winning in Preview
+                std::string sel = "." + ov_cls;
                 overrides << sel << " {\n";
                 if (!n->visible) {
                     overrides << "  display: none;\n";
                 }
+                if (force_rel_parent && (!n->modified_transform || n->pos_mode == RmlPositionMode::Static)) {
+                    overrides << "  position: relative;\n";
+                }
                 if (!n->from_import || n->modified_transform) {
-                    overrides << "  box-sizing: border-box;\n"
-                              << "  margin: 0px;\n";
-                    if (in_flex) {
-                        overrides << "  position: relative;\n"
-                                  << "  left: auto;\n"
-                                  << "  top: auto;\n";
+                    const std::string& tg = n->tag;
+                    bool is_inline_tag = (tg == "span" || tg == "a" || tg == "b" || tg == "i" ||
+                                          tg == "strong" || tg == "em" || tg == "label" || tg == "small");
+                    bool in_flow = (n->pos_mode != RmlPositionMode::Absolute);
+                    bool emit_margin_and_auto = (!n->from_import || n->explicit_anchor_or_margin);
+                    if (n->visible && in_flex && in_flow && is_inline_tag && !n->display_flex &&
+                        (n->size_mode_w == 0 || n->size_mode_h == 0)) {
+                        overrides << "  display: inline-block;\n";
+                    }
+                    overrides << "  box-sizing: border-box;\n";
+                    if (n->pos_mode == RmlPositionMode::Static) {
+                        if (!force_rel_parent) {
+                            overrides << "  position: static;\n";
+                        }
+                        if (n->has_margin_left) {
+                            overrides << "  margin-left: " << FormatRmlLength(n->margin_left, pw, n->unit_x, n->em_base_px, n->dp_ratio) << ";\n";
+                        }
+                        if (n->has_margin_top) {
+                            overrides << "  margin-top: " << FormatRmlLength(n->margin_top, ph, n->unit_y, n->em_base_px, n->dp_ratio) << ";\n";
+                        }
+                        if (!n->has_margin_left && !n->has_margin_top && emit_margin_and_auto) {
+                            overrides << "  margin: 0px;\n";
+                        }
+                        if (emit_margin_and_auto) {
+                            overrides << "  left: auto;\n"
+                                      << "  right: auto;\n"
+                                      << "  top: auto;\n"
+                                      << "  bottom: auto;\n";
+                        }
+                    } else if (n->pos_mode == RmlPositionMode::Relative) {
+                        if (!force_rel_parent) {
+                            overrides << "  position: relative;\n";
+                        }
+                        if (n->has_margin_left) {
+                            overrides << "  margin-left: " << FormatRmlLength(n->margin_left, pw, n->unit_x, n->em_base_px, n->dp_ratio) << ";\n";
+                        }
+                        if (n->has_margin_top) {
+                            overrides << "  margin-top: " << FormatRmlLength(n->margin_top, ph, n->unit_y, n->em_base_px, n->dp_ratio) << ";\n";
+                        }
+                        if (!n->has_margin_left && !n->has_margin_top && emit_margin_and_auto) {
+                            overrides << "  margin: 0px;\n";
+                        }
+                        overrides << "  left: " << FormatRmlLength(n->rel_x, pw, n->unit_x, n->em_base_px, n->dp_ratio) << ";\n"
+                                  << "  top: " << FormatRmlLength(n->rel_y, ph, n->unit_y, n->em_base_px, n->dp_ratio) << ";\n";
+                        if (emit_margin_and_auto) {
+                            overrides << "  right: auto;\n"
+                                      << "  bottom: auto;\n";
+                        }
                     } else {
+                        if (emit_margin_and_auto) overrides << "  margin: 0px;\n";
                         overrides << "  position: absolute;\n";
                         if (n->size_mode_w != 2) {
-                            if (n->anchor_h == 1) overrides << "  right: " << fmt_px(pw - (n->x + n->width)) << ";\n  left: auto;\n";
-                            else if (n->anchor_h == 2) overrides << "  left: " << fmt_px(n->x) << ";\n  right: " << fmt_px(pw - (n->x + n->width)) << ";\n";
-                            else overrides << "  left: " << fmt_px(n->x) << ";\n";
+                            if (n->anchor_h == 1) {
+                                overrides << "  right: " << FormatRmlLength(pw - (n->x + n->width), pw, n->unit_x, n->em_base_px, n->dp_ratio) << ";\n";
+                                if (emit_margin_and_auto) overrides << "  left: auto;\n";
+                            } else if (n->anchor_h == 2) {
+                                overrides << "  left: " << FormatRmlLength(n->x, pw, n->unit_x, n->em_base_px, n->dp_ratio) << ";\n"
+                                          << "  right: " << FormatRmlLength(pw - (n->x + n->width), pw, n->unit_x, n->em_base_px, n->dp_ratio) << ";\n";
+                            } else {
+                                overrides << "  left: " << FormatRmlLength(n->x, pw, n->unit_x, n->em_base_px, n->dp_ratio) << ";\n";
+                                if (emit_margin_and_auto) overrides << "  right: auto;\n";
+                            }
                         } else {
                             overrides << "  left: 0px;\n";
+                            if (emit_margin_and_auto) overrides << "  right: auto;\n";
                         }
                         if (n->size_mode_h != 2) {
-                            if (n->anchor_v == 1) overrides << "  bottom: " << fmt_px(ph - (n->y + n->height)) << ";\n  top: auto;\n";
-                            else if (n->anchor_v == 2) overrides << "  top: " << fmt_px(n->y) << ";\n  bottom: " << fmt_px(ph - (n->y + n->height)) << ";\n";
-                            else overrides << "  top: " << fmt_px(n->y) << ";\n";
+                            if (n->anchor_v == 1) {
+                                overrides << "  bottom: " << FormatRmlLength(ph - (n->y + n->height), ph, n->unit_y, n->em_base_px, n->dp_ratio) << ";\n";
+                                if (emit_margin_and_auto) overrides << "  top: auto;\n";
+                            } else if (n->anchor_v == 2) {
+                                overrides << "  top: " << FormatRmlLength(n->y, ph, n->unit_y, n->em_base_px, n->dp_ratio) << ";\n"
+                                          << "  bottom: " << FormatRmlLength(ph - (n->y + n->height), ph, n->unit_y, n->em_base_px, n->dp_ratio) << ";\n";
+                            } else {
+                                overrides << "  top: " << FormatRmlLength(n->y, ph, n->unit_y, n->em_base_px, n->dp_ratio) << ";\n";
+                                if (emit_margin_and_auto) overrides << "  bottom: auto;\n";
+                            }
                         } else {
                             overrides << "  top: 0px;\n";
+                            if (emit_margin_and_auto) overrides << "  bottom: auto;\n";
                         }
                     }
 
-                    bool fill_main = in_flex && ((par->flex_direction == 0 && n->size_mode_w == 2) ||
-                                                 (par->flex_direction == 1 && n->size_mode_h == 2));
+                    bool fill_main = in_flex && in_flow && ((par->flex_direction == 0 && n->size_mode_w == 2) ||
+                                                             (par->flex_direction == 1 && n->size_mode_h == 2));
                     if (fill_main) overrides << "  flex: 1;\n";
-                    else if (in_flex) overrides << "  flex-shrink: 0;\n";
+                    else if (in_flex && in_flow) overrides << "  flex-shrink: 0;\n";
 
                     if (n->size_mode_w == 1) overrides << "  width: auto;\n";
-                    else if (n->size_mode_w == 2) overrides << (in_flex && par->flex_direction == 0 ? "  min-width: 0px;\n  width: auto;\n" : "  width: 100%;\n");
-                    else if (!in_flex && n->anchor_h == 2) overrides << "  width: auto;\n";
-                    else overrides << "  width: " << fmt_px(n->width) << ";\n";
+                    else if (n->size_mode_w == 2) overrides << (in_flex && in_flow && par->flex_direction == 0 ? "  min-width: 0px;\n  width: auto;\n" : "  width: 100%;\n");
+                    else if (!in_flow && n->anchor_h == 2) overrides << "  width: auto;\n";
+                    else overrides << "  width: " << FormatRmlLength(n->width, pw, n->unit_w, n->em_base_px, n->dp_ratio) << ";\n";
 
                     if (n->size_mode_h == 1) overrides << "  height: auto;\n";
-                    else if (n->size_mode_h == 2) overrides << (in_flex && par->flex_direction == 1 ? "  min-height: 0px;\n  height: auto;\n" : "  height: 100%;\n");
-                    else if (!in_flex && n->anchor_v == 2) overrides << "  height: auto;\n";
-                    else overrides << "  height: " << fmt_px(n->height) << ";\n";
+                    else if (n->size_mode_h == 2) overrides << (in_flex && in_flow && par->flex_direction == 1 ? "  min-height: 0px;\n  height: auto;\n" : "  height: 100%;\n");
+                    else if (!in_flow && n->anchor_v == 2) overrides << "  height: auto;\n";
+                    else overrides << "  height: " << FormatRmlLength(n->height, ph, n->unit_h, n->em_base_px, n->dp_ratio) << ";\n";
                 }
                 if (!n->from_import || n->modified_style) {
                     if (n->has_bg) overrides << "  background-color: " << n->bg_color.ToCss() << ";\n";
@@ -650,8 +840,8 @@ void RmlDocument::GenerateRmlAndRcss(
                 for (const auto& [ak, _] : n->extra_attrs) {
                     if (ak == "src") has_src = true;
                 }
-                if (!n->image_bytes.empty() && !n->image_src.empty()) {
-                    out_assets.push_back({n->image_src, n->image_bytes});
+                if (n->image_data && !n->image_data->empty() && !n->image_src.empty()) {
+                    out_assets.push_back({n->image_src, n->image_data});
                 }
                 rml_body << indent << "<img" << attrs_str;
                 if (!has_src && !n->image_src.empty()) rml_body << " src=\"" << html_escape(n->image_src) << "\"";
@@ -729,6 +919,7 @@ void RmlDocument::GenerateRmlAndRcss(
         if (!n || !n->visible) return;
 
         std::string cls = unique_class(n->rml_class.empty() ? n->name : n->rml_class);
+        if (out_node_classes) (*out_node_classes)[n->id] = cls;
         std::string indent(static_cast<size_t>(depth) * 2 + 4, ' ');
         bool is_root = (id == root_id);
         bool parent_is_root = (n->parent_id == root_id);
@@ -747,18 +938,29 @@ void RmlDocument::GenerateRmlAndRcss(
                  << "  left: 0px;\n"
                  << "  width: 100%;\n"
                  << "  height: 100%;\n";
-        } else if (in_flex) {
-            rcss << "  position: relative;\n"
-                 << "  margin: 0px;\n";
-            bool fill_main = ((par->flex_direction == 0 && n->size_mode_w == 2) ||
-                              (par->flex_direction == 1 && n->size_mode_h == 2));
-            if (fill_main) rcss << "  flex: 1;\n";
-            else rcss << "  flex-shrink: 0;\n";
+        } else if (n->pos_mode != RmlPositionMode::Absolute) {
+            if (n->pos_mode == RmlPositionMode::Static) {
+                rcss << "  position: static;\n";
+            } else {
+                rcss << "  position: relative;\n";
+                if (std::fabs(n->rel_x) > 0.01f) rcss << "  left: " << fmt_px(n->rel_x) << ";\n";
+                if (std::fabs(n->rel_y) > 0.01f) rcss << "  top: " << fmt_px(n->rel_y) << ";\n";
+            }
+            if (n->has_margin_left) rcss << "  margin-left: " << fmt_px(n->margin_left) << ";\n";
+            if (n->has_margin_top) rcss << "  margin-top: " << fmt_px(n->margin_top) << ";\n";
+            if (!n->has_margin_left && !n->has_margin_top) rcss << "  margin: 0px;\n";
+
+            if (in_flex) {
+                bool fill_main = ((par->flex_direction == 0 && n->size_mode_w == 2) ||
+                                  (par->flex_direction == 1 && n->size_mode_h == 2));
+                if (fill_main) rcss << "  flex: 1;\n";
+                else rcss << "  flex-shrink: 0;\n";
+            }
 
             if (n->size_mode_w == 1) {
                 rcss << "  width: auto;\n";
             } else if (n->size_mode_w == 2) {
-                if (par->flex_direction == 0) rcss << "  min-width: 0px;\n  width: auto;\n";
+                if (in_flex && par->flex_direction == 0) rcss << "  min-width: 0px;\n  width: auto;\n";
                 else rcss << "  width: 100%;\n";
             } else {
                 rcss << "  width: " << fmt_px(n->width) << ";\n";
@@ -767,7 +969,7 @@ void RmlDocument::GenerateRmlAndRcss(
             if (n->size_mode_h == 1) {
                 rcss << "  height: auto;\n";
             } else if (n->size_mode_h == 2) {
-                if (par->flex_direction == 1) rcss << "  min-height: 0px;\n  height: auto;\n";
+                if (in_flex && par->flex_direction == 1) rcss << "  min-height: 0px;\n  height: auto;\n";
                 else rcss << "  height: 100%;\n";
             } else {
                 rcss << "  height: " << fmt_px(n->height) << ";\n";
@@ -892,8 +1094,8 @@ void RmlDocument::GenerateRmlAndRcss(
                      << html_escape(n->placeholder) << "\" />\n";
         } else if (n->tag == "img") {
             std::string src = n->image_src.empty() ? "image.png" : n->image_src;
-            if (!n->image_bytes.empty()) {
-                out_assets.push_back({src, n->image_bytes});
+            if (n->image_data && !n->image_data->empty()) {
+                out_assets.push_back({src, n->image_data});
             }
             rml_body << indent << "<img" << id_attr << fc_attr << " class=\"" << cls << "\" src=\"" << html_escape(src) << "\" />\n";
         } else if (n->tag == "button") {
@@ -965,13 +1167,14 @@ bool RmlDocument::ExportToPath(const std::string& rml_path, std::string& out_err
             f.write(rcss_str.data(), static_cast<std::streamsize>(rcss_str.size()));
         }
         for (const auto& asset : assets) {
+            if (!asset.data || asset.data->empty()) continue;
             fs::path ap = dir.empty() ? fs::path(asset.filename) : (dir / asset.filename);
             if (!ap.parent_path().empty()) {
                 fs::create_directories(ap.parent_path());
             }
             std::ofstream af(ap, std::ios::binary);
             if (af) {
-                af.write(reinterpret_cast<const char*>(asset.bytes.data()), static_cast<std::streamsize>(asset.bytes.size()));
+                af.write(reinterpret_cast<const char*>(asset.data->data()), static_cast<std::streamsize>(asset.data->size()));
             }
         }
         return true;
@@ -1054,58 +1257,124 @@ bool parse_css_color(const std::string& v, RmlColor& out) {
 
 namespace {
 
-std::string sanitize_rgba_calls(const std::string& val) {
+enum class RcssLexState {
+    Normal,
+    InSingleQuote,
+    InDoubleQuote,
+    InBlockComment
+};
+
+bool is_css_ident_char(unsigned char ch) {
+    return std::isalnum(ch) != 0 || ch == '_' || ch == '-';
+}
+
+// Scanner lexico de rgba(r, g, b, a) preservando strings, comentarios e parenteses aninhados
+std::string sanitize_rgba_calls_lex(const std::string& val) {
     std::string out;
     out.reserve(val.size() + 16);
+    RcssLexState state = RcssLexState::Normal;
     size_t i = 0;
     const size_t n = val.size();
+
     while (i < n) {
-        if (val[i] == '"' || val[i] == '\'') {
-            char q = val[i];
-            out.push_back(val[i++]);
-            while (i < n) {
-                if (val[i] == '\\' && i + 1 < n) {
-                    out.push_back(val[i++]);
-                    out.push_back(val[i++]);
-                } else {
-                    char c = val[i++];
-                    out.push_back(c);
-                    if (c == q) break;
-                }
+        char c = val[i];
+        if (state == RcssLexState::InBlockComment) {
+            out.push_back(c);
+            if (c == '*' && i + 1 < n && val[i + 1] == '/') {
+                out.push_back('/');
+                i += 2;
+                state = RcssLexState::Normal;
+                continue;
             }
+            ++i;
             continue;
         }
-        if (i + 1 < n && val[i] == '/' && val[i + 1] == '*') {
-            size_t end = val.find("*/", i + 2);
-            if (end == std::string::npos) {
-                out.append(val, i, n - i);
-                break;
+        if (state == RcssLexState::InSingleQuote || state == RcssLexState::InDoubleQuote) {
+            char q = (state == RcssLexState::InSingleQuote) ? '\'' : '"';
+            out.push_back(c);
+            if (c == '\\' && i + 1 < n) {
+                out.push_back(val[i + 1]);
+                i += 2;
+                continue;
             }
-            out.append(val, i, end + 2 - i);
-            i = end + 2;
+            if (c == q) state = RcssLexState::Normal;
+            ++i;
             continue;
         }
-        bool boundary_ok = (i == 0) || !(std::isalnum(static_cast<unsigned char>(val[i - 1])) || val[i - 1] == '_' || val[i - 1] == '-');
+
+        if (c == '/' && i + 1 < n && val[i + 1] == '*') {
+            out.append("/*");
+            i += 2;
+            state = RcssLexState::InBlockComment;
+            continue;
+        }
+        if (c == '\'') { out.push_back(c); state = RcssLexState::InSingleQuote; ++i; continue; }
+        if (c == '"') { out.push_back(c); state = RcssLexState::InDoubleQuote; ++i; continue; }
+
+        bool boundary_ok = (i == 0 || !is_css_ident_char(static_cast<unsigned char>(val[i - 1])));
         if (boundary_ok && i + 5 <= n &&
             (val[i] == 'r' || val[i] == 'R') &&
             (val[i + 1] == 'g' || val[i + 1] == 'G') &&
             (val[i + 2] == 'b' || val[i + 2] == 'B') &&
             (val[i + 3] == 'a' || val[i + 3] == 'A') &&
             val[i + 4] == '(') {
-            size_t close_p = val.find(')', i + 5);
-            if (close_p != std::string::npos) {
-                std::string inner = val.substr(i + 5, close_p - (i + 5));
-                std::vector<std::string> parts;
-                size_t p0 = 0;
-                for (;;) {
-                    size_t comma = inner.find(',', p0);
-                    if (comma == std::string::npos) {
-                        parts.push_back(trim_ws(inner.substr(p0)));
-                        break;
-                    }
-                    parts.push_back(trim_ws(inner.substr(p0, comma - p0)));
-                    p0 = comma + 1;
+            size_t j = i + 5;
+            int depth = 1;
+            RcssLexState inner_state = RcssLexState::Normal;
+            while (j < n && depth > 0) {
+                char cj = val[j];
+                if (inner_state == RcssLexState::InBlockComment) {
+                    if (cj == '*' && j + 1 < n && val[j + 1] == '/') { j += 2; inner_state = RcssLexState::Normal; continue; }
+                    ++j;
+                    continue;
                 }
+                if (inner_state == RcssLexState::InSingleQuote || inner_state == RcssLexState::InDoubleQuote) {
+                    char qj = (inner_state == RcssLexState::InSingleQuote) ? '\'' : '"';
+                    if (cj == '\\' && j + 1 < n) { j += 2; continue; }
+                    if (cj == qj) inner_state = RcssLexState::Normal;
+                    ++j;
+                    continue;
+                }
+                if (cj == '/' && j + 1 < n && val[j + 1] == '*') { j += 2; inner_state = RcssLexState::InBlockComment; continue; }
+                if (cj == '\'') { inner_state = RcssLexState::InSingleQuote; ++j; continue; }
+                if (cj == '"') { inner_state = RcssLexState::InDoubleQuote; ++j; continue; }
+                if (cj == '(') ++depth;
+                else if (cj == ')') --depth;
+                ++j;
+            }
+
+            if (depth == 0) {
+                std::string raw_inner = val.substr(i + 5, (j - 1) - (i + 5));
+                std::string inner = sanitize_rgba_calls_lex(raw_inner);
+
+                std::vector<std::string> parts;
+                size_t pstart = 0;
+                int arg_depth = 0;
+                RcssLexState arg_state = RcssLexState::Normal;
+                for (size_t k = 0; k < inner.size(); ++k) {
+                    char ck = inner[k];
+                    if (arg_state == RcssLexState::InBlockComment) {
+                        if (ck == '*' && k + 1 < inner.size() && inner[k + 1] == '/') { ++k; arg_state = RcssLexState::Normal; }
+                        continue;
+                    }
+                    if (arg_state == RcssLexState::InSingleQuote || arg_state == RcssLexState::InDoubleQuote) {
+                        char qk = (arg_state == RcssLexState::InSingleQuote) ? '\'' : '"';
+                        if (ck == '\\' && k + 1 < inner.size()) { ++k; continue; }
+                        if (ck == qk) arg_state = RcssLexState::Normal;
+                        continue;
+                    }
+                    if (ck == '/' && k + 1 < inner.size() && inner[k + 1] == '*') { ++k; arg_state = RcssLexState::InBlockComment; continue; }
+                    if (ck == '\'') { arg_state = RcssLexState::InSingleQuote; continue; }
+                    if (ck == '"') { arg_state = RcssLexState::InDoubleQuote; continue; }
+                    if (ck == '(') ++arg_depth;
+                    else if (ck == ')' && arg_depth > 0) --arg_depth;
+                    else if (ck == ',' && arg_depth == 0) {
+                        parts.push_back(trim_ws(inner.substr(pstart, k - pstart)));
+                        pstart = k + 1;
+                    }
+                }
+                parts.push_back(trim_ws(inner.substr(pstart)));
+
                 if (parts.size() == 4) {
                     const std::string& a_raw = parts[3];
                     bool is_pct = (!a_raw.empty() && a_raw.back() == '%');
@@ -1113,7 +1382,7 @@ std::string sanitize_rgba_calls(const std::string& val) {
                     if (!is_pct && has_dot) {
                         char* end_ptr = nullptr;
                         float af = std::strtof(a_raw.c_str(), &end_ptr);
-                        if (end_ptr != a_raw.c_str() && *trim_ws(end_ptr).c_str() == '\0') {
+                        if (end_ptr != a_raw.c_str() && trim_ws(end_ptr).empty()) {
                             if (af >= 0.0f && af <= 1.0f) {
                                 int ai = static_cast<int>(std::lround(std::clamp(af, 0.0f, 1.0f) * 255.0f));
                                 parts[3] = std::to_string(std::clamp(ai, 0, 255));
@@ -1121,50 +1390,74 @@ std::string sanitize_rgba_calls(const std::string& val) {
                         }
                     }
                     out += "rgba(" + parts[0] + ", " + parts[1] + ", " + parts[2] + ", " + parts[3] + ")";
-                    i = close_p + 1;
+                    i = j;
                     continue;
                 }
             }
         }
-        out.push_back(val[i++]);
+        out.push_back(c);
+        ++i;
     }
     return out;
 }
 
-std::string strip_border_style_keywords(const std::string& val) {
-    std::vector<std::string> tokens;
+std::string strip_border_style_keywords_lex(const std::string& val) {
+    struct Tok { std::string text; bool is_comment; };
+    std::vector<Tok> tokens;
     std::string cur;
     int paren = 0;
-    char quote = 0;
+    RcssLexState state = RcssLexState::Normal;
+
     for (size_t i = 0; i < val.size(); ++i) {
         char c = val[i];
-        if (quote) {
+        if (state == RcssLexState::InBlockComment) {
             cur.push_back(c);
-            if (c == '\\' && i + 1 < val.size()) {
-                cur.push_back(val[++i]);
-            } else if (c == quote) {
-                quote = 0;
+            if (c == '*' && i + 1 < val.size() && val[i + 1] == '/') {
+                cur.push_back('/');
+                ++i;
+                state = RcssLexState::Normal;
+                if (paren == 0) {
+                    tokens.push_back({cur, true});
+                    cur.clear();
+                }
             }
             continue;
         }
-        if (c == '"' || c == '\'') {
-            quote = c;
+        if (state == RcssLexState::InSingleQuote || state == RcssLexState::InDoubleQuote) {
+            char q = (state == RcssLexState::InSingleQuote) ? '\'' : '"';
             cur.push_back(c);
+            if (c == '\\' && i + 1 < val.size()) {
+                cur.push_back(val[++i]);
+            } else if (c == q) {
+                state = RcssLexState::Normal;
+            }
             continue;
         }
+        if (c == '/' && i + 1 < val.size() && val[i + 1] == '*') {
+            if (paren == 0 && !cur.empty()) {
+                tokens.push_back({cur, false});
+                cur.clear();
+            }
+            cur.append("/*");
+            ++i;
+            state = RcssLexState::InBlockComment;
+            continue;
+        }
+        if (c == '\'') { state = RcssLexState::InSingleQuote; cur.push_back(c); continue; }
+        if (c == '"') { state = RcssLexState::InDoubleQuote; cur.push_back(c); continue; }
         if (c == '(') ++paren;
         else if (c == ')' && paren > 0) --paren;
 
         if (paren == 0 && (c == ' ' || c == '\t' || c == '\r' || c == '\n')) {
             if (!cur.empty()) {
-                tokens.push_back(cur);
+                tokens.push_back({cur, false});
                 cur.clear();
             }
         } else {
             cur.push_back(c);
         }
     }
-    if (!cur.empty()) tokens.push_back(cur);
+    if (!cur.empty()) tokens.push_back({cur, state == RcssLexState::InBlockComment});
 
     auto is_border_style_kw = [](std::string t) {
         std::transform(t.begin(), t.end(), t.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -1174,43 +1467,124 @@ std::string strip_border_style_keywords(const std::string& val) {
     };
 
     std::string joined;
+    bool has_non_comment = false;
     for (const auto& t : tokens) {
-        if (is_border_style_kw(t)) continue;
+        if (!t.is_comment && is_border_style_kw(t.text)) continue;
+        if (!t.is_comment) has_non_comment = true;
         if (!joined.empty()) joined.push_back(' ');
-        joined += t;
+        joined += t.text;
     }
-    return joined.empty() ? std::string("0px") : joined;
+    if (!has_non_comment) {
+        return joined.empty() ? std::string("0px") : (std::string("0px ") + joined);
+    }
+    return joined;
+}
+
+std::string format_font_family_for_rmlui_lex(const std::string& val) {
+    std::string code_only;
+    std::string trailing_comments;
+    RcssLexState state = RcssLexState::Normal;
+    bool has_comma = false;
+    int quote_count = 0;
+
+    for (size_t i = 0; i < val.size(); ++i) {
+        char c = val[i];
+        if (state == RcssLexState::InBlockComment) {
+            trailing_comments.push_back(c);
+            if (c == '*' && i + 1 < val.size() && val[i + 1] == '/') {
+                trailing_comments.push_back('/');
+                ++i;
+                state = RcssLexState::Normal;
+            }
+            continue;
+        }
+        if (state == RcssLexState::InSingleQuote || state == RcssLexState::InDoubleQuote) {
+            char q = (state == RcssLexState::InSingleQuote) ? '\'' : '"';
+            if (c == '\\' && i + 1 < val.size()) {
+                code_only.push_back(val[i + 1]);
+                ++i;
+                continue;
+            }
+            if (c == q) { state = RcssLexState::Normal; continue; }
+            if (c == ',') has_comma = true;
+            code_only.push_back(c);
+            continue;
+        }
+        if (c == '/' && i + 1 < val.size() && val[i + 1] == '*') {
+            if (!trailing_comments.empty()) trailing_comments.push_back(' ');
+            trailing_comments.append("/*");
+            ++i;
+            state = RcssLexState::InBlockComment;
+            continue;
+        }
+        if (c == '\'' || c == '"') {
+            ++quote_count;
+            state = (c == '\'') ? RcssLexState::InSingleQuote : RcssLexState::InDoubleQuote;
+            continue;
+        }
+        if (c == ',') has_comma = true;
+        code_only.push_back(c);
+    }
+
+    if (!has_comma && quote_count <= 2) {
+        return val;
+    }
+
+    std::string list_clean = trim_ws(code_only);
+    if (list_clean.empty()) return val;
+    std::string escaped;
+    escaped.reserve(list_clean.size() + 4);
+    escaped.push_back('"');
+    for (char ch : list_clean) {
+        if (ch == '"') continue;
+        escaped.push_back(ch);
+    }
+    escaped.push_back('"');
+    if (!trailing_comments.empty()) {
+        escaped.push_back(' ');
+        escaped += trailing_comments;
+    }
+    return escaped;
 }
 
 std::string sanitize_single_declaration(const std::string& decl) {
-    // Preserve leading whitespace so indentation survives cleanly
-    size_t first_non_ws = decl.find_first_not_of(" \t\r\n");
-    if (first_non_ws == std::string::npos) return decl;
-    std::string leading = decl.substr(0, first_non_ws);
-    std::string body = decl.substr(first_non_ws);
+    size_t scan = 0;
+    const size_t len = decl.size();
+    RcssLexState st = RcssLexState::Normal;
+    while (scan < len) {
+        char c = decl[scan];
+        if (st == RcssLexState::InBlockComment) {
+            if (c == '*' && scan + 1 < len && decl[scan + 1] == '/') { scan += 2; st = RcssLexState::Normal; continue; }
+            ++scan;
+            continue;
+        }
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') { ++scan; continue; }
+        if (c == '/' && scan + 1 < len && decl[scan + 1] == '*') { scan += 2; st = RcssLexState::InBlockComment; continue; }
+        break;
+    }
+    if (scan >= len || st != RcssLexState::Normal) return decl;
 
-    // Find first ':' outside quotes/comments
+    std::string leading = decl.substr(0, scan);
+    std::string body = decl.substr(scan);
+
     size_t colon = std::string::npos;
+    st = RcssLexState::Normal;
     for (size_t i = 0; i < body.size(); ++i) {
-        if (body[i] == '"' || body[i] == '\'') {
-            char q = body[i++];
-            while (i < body.size()) {
-                if (body[i] == '\\' && i + 1 < body.size()) i += 2;
-                else if (body[i++] == q) break;
-            }
-            --i;
+        char c = body[i];
+        if (st == RcssLexState::InBlockComment) {
+            if (c == '*' && i + 1 < body.size() && body[i + 1] == '/') { ++i; st = RcssLexState::Normal; }
             continue;
         }
-        if (i + 1 < body.size() && body[i] == '/' && body[i + 1] == '*') {
-            size_t end = body.find("*/", i + 2);
-            if (end == std::string::npos) break;
-            i = end + 1;
+        if (st == RcssLexState::InSingleQuote || st == RcssLexState::InDoubleQuote) {
+            char q = (st == RcssLexState::InSingleQuote) ? '\'' : '"';
+            if (c == '\\' && i + 1 < body.size()) { ++i; continue; }
+            if (c == q) st = RcssLexState::Normal;
             continue;
         }
-        if (body[i] == ':') {
-            colon = i;
-            break;
-        }
+        if (c == '/' && i + 1 < body.size() && body[i + 1] == '*') { ++i; st = RcssLexState::InBlockComment; continue; }
+        if (c == '\'') { st = RcssLexState::InSingleQuote; continue; }
+        if (c == '"') { st = RcssLexState::InDoubleQuote; continue; }
+        if (c == ':') { colon = i; break; }
     }
     if (colon == std::string::npos) return decl;
 
@@ -1219,50 +1593,48 @@ std::string sanitize_single_declaration(const std::string& decl) {
     std::transform(prop_low.begin(), prop_low.end(), prop_low.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
 
     std::string val_raw = body.substr(colon + 1);
-    std::string val = sanitize_rgba_calls(trim_ws(val_raw));
+    std::string val = sanitize_rgba_calls_lex(trim_ws(val_raw));
     if (prop_low == "border" || prop_low == "border-top" || prop_low == "border-right" ||
         prop_low == "border-bottom" || prop_low == "border-left") {
-        val = strip_border_style_keywords(val);
+        val = strip_border_style_keywords_lex(val);
     } else if (prop_low == "font-family" && !val.empty()) {
-        std::string val_low = val;
-        std::transform(val_low.begin(), val_low.end(), val_low.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-        if (val_low.find("segoe ui") == std::string::npos) {
-            size_t cmt_pos = val.rfind("/*");
-            if (cmt_pos != std::string::npos && val.find("*/", cmt_pos + 2) != std::string::npos &&
-                trim_ws(val.substr(val.find("*/", cmt_pos + 2) + 2)).empty()) {
-                std::string before_cmt = trim_ws(val.substr(0, cmt_pos));
-                if (!before_cmt.empty()) {
-                    val = before_cmt + ", \"Segoe UI\", \"Consolas\" " + val.substr(cmt_pos);
-                } else {
-                    val += ", \"Segoe UI\", \"Consolas\"";
-                }
-            } else {
-                val += ", \"Segoe UI\", \"Consolas\"";
-            }
-        }
+        val = format_font_family_for_rmlui_lex(val);
     }
     return leading + prop + ": " + val;
 }
 
 } // namespace
 
+std::string StripUtf8Bom(const std::string& raw) {
+    if (raw.size() >= 3 &&
+        static_cast<unsigned char>(raw[0]) == 0xEF &&
+        static_cast<unsigned char>(raw[1]) == 0xBB &&
+        static_cast<unsigned char>(raw[2]) == 0xBF) {
+        return raw.substr(3);
+    }
+    return raw;
+}
+
 std::string SanitizeRcssForRmlUi(const std::string& raw_rcss) {
     try {
-        std::string src = raw_rcss;
-        if (src.size() >= 3 &&
-            static_cast<unsigned char>(src[0]) == 0xEF &&
-            static_cast<unsigned char>(src[1]) == 0xBB &&
-            static_cast<unsigned char>(src[2]) == 0xBF) {
-            src.erase(0, 3);
-        }
-
+        std::string src = StripUtf8Bom(raw_rcss);
         std::string out;
         out.reserve(src.size() + 64);
 
+        RcssLexState state = RcssLexState::Normal;
         int brace_depth = 0;
         std::string decl_buf;
         size_t i = 0;
         const size_t n = src.size();
+
+        auto emit_chunk = [&](const std::string& chunk) {
+            if (brace_depth > 0) decl_buf += chunk;
+            else out += chunk;
+        };
+        auto emit_char = [&](char ch) {
+            if (brace_depth > 0) decl_buf.push_back(ch);
+            else out.push_back(ch);
+        };
         auto flush_decl = [&](bool append_semi) {
             if (!decl_buf.empty()) {
                 out += sanitize_single_declaration(decl_buf);
@@ -1273,25 +1645,38 @@ std::string SanitizeRcssForRmlUi(const std::string& raw_rcss) {
 
         while (i < n) {
             char c = src[i];
-            if (i + 1 < n && c == '/' && src[i + 1] == '*') {
-                size_t end = src.find("*/", i + 2);
-                std::string cmt = (end == std::string::npos) ? src.substr(i) : src.substr(i, end + 2 - i);
-                if (brace_depth > 0) decl_buf += cmt;
-                else out += cmt;
-                i = (end == std::string::npos) ? n : (end + 2);
-                continue;
-            }
-            if (c == '"' || c == '\'') {
-                size_t start = i++;
-                while (i < n) {
-                    if (src[i] == '\\' && i + 1 < n) i += 2;
-                    else if (src[i++] == c) break;
+            if (state == RcssLexState::InBlockComment) {
+                emit_char(c);
+                if (c == '*' && i + 1 < n && src[i + 1] == '/') {
+                    emit_char('/');
+                    i += 2;
+                    state = RcssLexState::Normal;
+                    continue;
                 }
-                std::string lit = src.substr(start, i - start);
-                if (brace_depth > 0) decl_buf += lit;
-                else out += lit;
+                ++i;
                 continue;
             }
+            if (state == RcssLexState::InSingleQuote || state == RcssLexState::InDoubleQuote) {
+                char q = (state == RcssLexState::InSingleQuote) ? '\'' : '"';
+                emit_char(c);
+                if (c == '\\' && i + 1 < n) {
+                    emit_char(src[i + 1]);
+                    i += 2;
+                    continue;
+                }
+                if (c == q) state = RcssLexState::Normal;
+                ++i;
+                continue;
+            }
+
+            if (c == '/' && i + 1 < n && src[i + 1] == '*') {
+                emit_chunk("/*");
+                i += 2;
+                state = RcssLexState::InBlockComment;
+                continue;
+            }
+            if (c == '\'') { emit_char(c); state = RcssLexState::InSingleQuote; ++i; continue; }
+            if (c == '"') { emit_char(c); state = RcssLexState::InDoubleQuote; ++i; continue; }
             if (c == '{') {
                 if (brace_depth > 0 && !decl_buf.empty()) {
                     out += decl_buf;
@@ -1316,11 +1701,7 @@ std::string SanitizeRcssForRmlUi(const std::string& raw_rcss) {
                 ++i;
                 continue;
             }
-            if (brace_depth > 0) {
-                decl_buf.push_back(c);
-            } else {
-                out.push_back(c);
-            }
+            emit_char(c);
             ++i;
         }
         if (!decl_buf.empty()) {
@@ -1341,7 +1722,7 @@ bool RmlDocument::ImportRcssFile(const std::string& rcss_path, std::string& out_
         }
         std::string raw_css((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
         has_imported_source = true;
-        imported_raw_rcss = SanitizeRcssForRmlUi(raw_css);
+        imported_raw_rcss = StripUtf8Bom(raw_css);
 
         for (auto& n : nodes) {
             n.modified_transform = false;

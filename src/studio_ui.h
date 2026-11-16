@@ -26,6 +26,7 @@ public:
     void OnChar(uint32_t codepoint);
 
     void UpdateAndRender(GlRenderer2D& gl, int width, int height);
+    void GetPerfStats(double& out_fps, double& out_total_ms, double& out_canvas_ms, double& out_editor_ms) const;
 
     void SetStatus(const std::string& msg);
     bool ImportRcssPath(const std::string& path);

@@ -1,5 +1,9 @@
 #include "studio_ui.h"
+#include "command_history.h"
+#include "gizmo_manipulator.h"
 #include "platform_utils.h"
+#include "rml_diagnostics.h"
+#include "viewport_controller.h"
 
 #include "../third_party/RmlUi/Backends/RmlUi_Platform_GLFW.h"
 
@@ -7,6 +11,7 @@
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/ElementText.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Elements/ElementFormControlTextArea.h>
 #include <RmlUi/Core/Event.h>
@@ -66,6 +71,27 @@ std::string EscapeXml(const std::string& s) {
     return out;
 }
 
+void SetElementTextFast(Rml::Element* el, const std::string& text) {
+    if (!el) return;
+    if (el->GetNumChildren() == 1) {
+        if (auto* text_el = dynamic_cast<Rml::ElementText*>(el->GetChild(0))) {
+            if (text_el->GetText() != text) {
+                if (!text_el->GetLines().empty()) {
+                    const Rml::Vector2f base_pos = text_el->GetLines()[0].position;
+                    text_el->SuppressAutoLayout();
+                    text_el->SetText(text);
+                    text_el->ClearLines();
+                    text_el->AddLine(base_pos, text);
+                } else {
+                    text_el->SetText(text);
+                }
+            }
+            return;
+        }
+    }
+    el->SetInnerRML(EscapeXml(text));
+}
+
 std::string FormatFloat(float v) {
     char buf[32];
     if (std::fabs(v - std::round(v)) < 0.05f) {
@@ -89,11 +115,6 @@ bool TryParseFloatStrict(const std::string& s, float& out) {
     return true;
 }
 
-float ParseFloatSafe(const std::string& s, float fallback) {
-    float v = fallback;
-    return TryParseFloatStrict(s, v) ? v : fallback;
-}
-
 bool TryParseIntStrict(const std::string& s, int& out) {
     size_t a = s.find_first_not_of(" \t\r\n");
     if (a == std::string::npos) return false;
@@ -105,11 +126,6 @@ bool TryParseIntStrict(const std::string& s, int& out) {
     if (end == t.c_str() || *end != '\0') return false;
     out = (int)v;
     return true;
-}
-
-int ParseIntSafe(const std::string& s, int fallback) {
-    int v = fallback;
-    return TryParseIntStrict(s, v) ? v : fallback;
 }
 
 std::string ColorToHex6(const RmlColor& c) {
@@ -168,21 +184,6 @@ int GetRmlKeyModifiers(GLFWwindow* w) {
     if (IsShiftDown(w)) mods |= Rml::Input::KM_SHIFT;
     if (IsAltDown(w)) mods |= Rml::Input::KM_ALT;
     return mods;
-}
-
-std::string EscapeRmlText(const std::string& s) {
-    std::string out;
-    out.reserve(s.size() + s.size() / 8);
-    for (char c : s) {
-        switch (c) {
-            case '&': out += "&amp;"; break;
-            case '<': out += "&lt;"; break;
-            case '>': out += "&gt;"; break;
-            case '"': out += "&quot;"; break;
-            default: out.push_back(c); break;
-        }
-    }
-    return out;
 }
 
 void HsvToRgb(float h_deg, float s, float v, uint8_t& r, uint8_t& g, uint8_t& b) {
@@ -915,9 +916,31 @@ button.dev-btn.active img.ico {
 .zoom-label {
     font-size: 10px;
     color: #9EA6B4;
-    min-width: 32px;
-    text-align: right;
+    width: 36px;
+    height: 14px;
+    line-height: 14px;
+    text-align: left;
+    overflow: hidden;
     font-family: Consolas;
+}
+
+#lbl-zoom-ctrl {
+    display: inline-block;
+    width: 36px;
+    height: 14px;
+    line-height: 14px;
+    text-align: left;
+    padding-left: 4px;
+    overflow: hidden;
+}
+
+#sb-perf {
+    display: inline-block;
+    width: 196px;
+    height: 14px;
+    line-height: 14px;
+    text-align: left;
+    overflow: hidden;
 }
 
 button.export-btn {
@@ -1306,8 +1329,8 @@ button.canvas-bg-btn:hover {
     flex-shrink: 0;
     display: flex;
     flex-direction: row;
-    background-color: #12151D;
-    border-bottom: 1px #252A34;
+    pointer-events: none;
+    background-color: rgba(0, 0, 0, 0);
 }
 
 #ruler-corner {
@@ -1315,6 +1338,7 @@ button.canvas-bg-btn:hover {
     height: 20px;
     background-color: #12151D;
     border-right: 1px #252A34;
+    border-bottom: 1px #252A34;
     font-family: Consolas;
     font-size: 9px;
     color: #738097;
@@ -1326,10 +1350,8 @@ button.canvas-bg-btn:hover {
 #ruler-top {
     flex: 1;
     height: 20px;
-    position: relative;
-    overflow: hidden;
-    clip: always;
-    background-color: #12151D;
+    pointer-events: none;
+    background-color: rgba(0, 0, 0, 0);
 }
 
 #viewport-mid-row {
@@ -1345,36 +1367,9 @@ button.canvas-bg-btn:hover {
 #ruler-left {
     width: 28px;
     height: 100%;
-    position: relative;
-    overflow: hidden;
-    clip: always;
-    background-color: #12151D;
-    border-right: 1px #252A34;
+    pointer-events: none;
+    background-color: rgba(0, 0, 0, 0);
     flex-shrink: 0;
-}
-
-.rtick-x {
-    position: absolute;
-    top: 0px;
-    height: 20px;
-    border-left: 1px #353B47;
-    padding-left: 4px;
-    font-family: Consolas;
-    font-size: 9px;
-    line-height: 19px;
-    color: #738097;
-}
-
-.rtick-y {
-    position: absolute;
-    left: 0px;
-    width: 28px;
-    border-top: 1px #353B47;
-    padding-top: 2px;
-    padding-left: 2px;
-    font-family: Consolas;
-    font-size: 9px;
-    color: #738097;
 }
 
 #viewport {
@@ -1394,9 +1389,9 @@ button.canvas-bg-btn:hover {
     position: absolute;
     left: 0px;
     top: 0px;
-    width: 100px;
-    height: 100px;
-    overflow: hidden;
+    width: 1px;
+    height: 1px;
+    overflow: visible;
     pointer-events: none;
     background-color: rgba(0, 0, 0, 0);
 }
@@ -1483,15 +1478,16 @@ button.empty-add-btn:hover {
 #artboard-meta {
     position: absolute;
     left: 0px;
-    bottom: 0px;
-    right: 0px;
-    height: 24px;
+    top: -24px;
+    width: 240px;
+    height: 22px;
     display: flex;
     flex-direction: row;
     align-items: center;
     justify-content: space-between;
-    padding: 0px 9px;
-    background-color: rgba(17, 23, 35, 232);
+    padding: 0px 8px;
+    border-radius: 4px;
+    background-color: rgba(17, 23, 35, 224);
     color: #99A7C4;
     font-family: Consolas;
     font-size: 9px;
@@ -1515,6 +1511,7 @@ button.empty-add-btn:hover {
     flex-direction: column;
     background-color: #0D1016;
     overflow: hidden;
+    clip: always;
 }
 
 .code-tabs {
@@ -1606,6 +1603,171 @@ button.code-copy-btn:hover {
     border-color: #4A5670;
 }
 
+.prob-count-badge {
+    min-width: 16px;
+    height: 16px;
+    line-height: 16px;
+    padding: 0px 5px;
+    border-radius: 8px;
+    font-size: 9px;
+    font-weight: bold;
+    text-align: center;
+    background-color: #232A38;
+    color: #94A3B8;
+}
+
+.prob-count-badge.zero {
+    background-color: #1D2330;
+    color: #6B7894;
+}
+
+.prob-count-badge.has-err {
+    background-color: #7F1D1D;
+    color: #FCA5A5;
+}
+
+.prob-count-badge.has-warn {
+    background-color: #78350F;
+    color: #FCD34D;
+}
+
+.prob-count-badge.has-unused {
+    background-color: #1E3A5F;
+    color: #93C5FD;
+}
+
+#problems-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background-color: #0D1016;
+    overflow: hidden;
+}
+
+#problems-toolbar {
+    height: 30px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0px 12px;
+    background-color: #11151E;
+    border-bottom: 1px #1F2633;
+}
+
+#problems-summary {
+    font-size: 10px;
+    color: #94A3B8;
+}
+
+button.prob-fix-btn {
+    height: 22px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 5px;
+    padding: 0px 10px;
+    border: 1px #3B82F6;
+    border-radius: 4px;
+    background-color: #1D4ED8;
+    color: #EFF6FF;
+    font-size: 9.5px;
+    font-weight: bold;
+}
+
+button.prob-fix-btn:hover {
+    background-color: #2563EB;
+    color: #FFFFFF;
+}
+
+button.prob-fix-btn.disabled {
+    border-color: #283040;
+    background-color: #161B24;
+    color: #556075;
+}
+
+button.prob-fix-btn.disabled:hover {
+    background-color: #161B24;
+    color: #556075;
+}
+
+#problems-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 4px 0px;
+}
+
+button.prob-row {
+    width: 100%;
+    min-height: 24px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    border: 0px rgba(0, 0, 0, 0);
+    border-bottom: 1px #151A24;
+    background-color: rgba(0, 0, 0, 0);
+    text-align: left;
+    font-size: 10.5px;
+    color: #CBD5E1;
+}
+
+button.prob-row:hover {
+    background-color: #171D29;
+}
+
+.prob-badge {
+    min-width: 58px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 8.5px;
+    font-weight: bold;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.prob-badge.sev-err {
+    background-color: rgba(239, 68, 68, 45);
+    border: 1px rgba(239, 68, 68, 130);
+    color: #FCA5A5;
+}
+
+.prob-badge.sev-warn {
+    background-color: rgba(245, 158, 11, 45);
+    border: 1px rgba(245, 158, 11, 130);
+    color: #FCD34D;
+}
+
+.prob-badge.sev-unused {
+    background-color: rgba(100, 116, 139, 55);
+    border: 1px rgba(148, 163, 184, 115);
+    color: #CBD5E1;
+}
+
+.prob-loc {
+    min-width: 82px;
+    font-family: Consolas;
+    font-size: 10px;
+    color: #7DD3FC;
+    flex-shrink: 0;
+}
+
+.prob-msg {
+    flex: 1;
+    color: #E2E8F0;
+    font-size: 10.5px;
+}
+
+.prob-empty {
+    padding: 18px 14px;
+    font-size: 11px;
+    color: #64748B;
+}
+
 #code-content {
     flex: 1;
     min-height: 0;
@@ -1615,6 +1777,7 @@ button.code-copy-btn:hover {
     padding: 0px;
     background-color: #0D1016;
     overflow: hidden;
+    clip: always;
 }
 
 #code-gutter {
@@ -1623,6 +1786,7 @@ button.code-copy-btn:hover {
     height: 100%;
     min-height: 0;
     overflow: hidden;
+    clip: always;
     background-color: #0A0D13;
     border-right: 1px #19202D;
     padding-top: 8px;
@@ -1665,6 +1829,7 @@ button.code-copy-btn:hover {
     min-height: 0;
     position: relative;
     overflow: hidden;
+    clip: always;
     background-color: #0D1016;
 }
 
@@ -1675,6 +1840,7 @@ button.code-copy-btn:hover {
     right: 0px;
     bottom: 0px;
     overflow: hidden;
+    clip: always;
     pointer-events: none;
 }
 
@@ -2784,6 +2950,7 @@ const char* kEditorRml = R"RML(<rml>
                     <div class="code-tab-list">
                         <button id="tab-code-rml" class="code-tab current"><img class="ico ico-14" src="studio_ico_code" /><span>Estrutura</span><span class="tab-ext">.RML</span></button>
                         <button id="tab-code-rcss" class="code-tab"><img class="ico ico-14" src="studio_ico_braces" /><span>Estilos</span><span class="tab-ext">.RCSS</span></button>
+                        <button id="tab-code-problems" class="code-tab"><img class="ico ico-14" src="studio_ico_alert" /><span>Problems</span><span id="problems-count-badge" class="prob-count-badge zero">0</span></button>
                     </div>
                     <div class="code-actions">
                         <span id="code-cursor-lbl" class="code-cursor-lbl">Ln 1, Col 1</span>
@@ -2801,6 +2968,13 @@ const char* kEditorRml = R"RML(<rml>
                         </div>
                         <textarea id="code-editor" class="code-editor" wrap="nowrap"></textarea>
                     </div>
+                </div>
+                <div id="problems-panel" class="hidden">
+                    <div id="problems-toolbar">
+                        <span id="problems-summary">Nenhum problema detectado</span>
+                        <button id="btn-clean-rcss" class="prob-fix-btn disabled"><span>Limpar RCSS Sobrando</span></button>
+                    </div>
+                    <div id="problems-list"></div>
                 </div>
             </div>
         </div>
@@ -2904,6 +3078,14 @@ const char* kEditorRml = R"RML(<rml>
                                     <button id="rh-hug" class="seg-btn" title="Ajustar ao conte&#250;do (Hug)"><span>Hug</span></button>
                                     <button id="rh-fill" class="seg-btn" title="Preencher container (Fill)"><span>Fill</span></button>
                                 </div>
+                            </div>
+                        </div>
+                        <div class="field-col">
+                            <span id="lbl-cap-posmode" class="field-caption">Posicionamento</span>
+                            <div class="seg-row seg-row-compact">
+                                <button id="pos-static" class="seg-btn" title="Fluxo normal (Static / margin)"><span>Static / Flow</span></button>
+                                <button id="pos-relative" class="seg-btn" title="Deslocamento relativo no fluxo"><span>Relative</span></button>
+                                <button id="pos-absolute" class="seg-btn active" title="Posicionamento livre absoluto"><span>Absolute</span></button>
                             </div>
                         </div>
                         <div class="field-col last">
@@ -3145,6 +3327,8 @@ const char* kEditorRml = R"RML(<rml>
             <span id="sb-vp">RML &#183; Canvas em tempo real</span>
         </div>
         <div class="status-grp">
+            <span id="sb-perf">-- FPS</span>
+            <span class="status-sep">&#183;</span>
             <span>RmlUI Studio</span>
             <span class="version-tag">v1.1.0</span>
         </div>
@@ -3228,8 +3412,6 @@ struct StudioUI::Impl {
     int win_h = 860;
 
     // Layout dimensions matching v0-project
-    bool show_rulers = true;
-    bool show_left_ruler = false;
     bool show_bottom_dock = true;
     std::string active_menu;
     std::string code_tab = "RML";
@@ -3251,9 +3433,9 @@ struct StudioUI::Impl {
     int split_start_mouse = 0;
     float split_start_size = 0.0f;
 
-    float LeftTotal() const { return left_panel_width + kSplitW + ((show_rulers && show_left_ruler) ? kRulerLeftW : 0.0f); }
+    float LeftTotal() const { return left_panel_width + kSplitW + ((viewport.show_rulers && viewport.show_left_ruler) ? kRulerLeftW : 0.0f); }
     float RightTotal() const { return kSplitW + right_inspector_width; }
-    float TopTotal() const { return kTopBarH + kToolbarH + kCanvasToolbarH + (show_rulers ? kRulerH : 0.0f); }
+    float TopTotal() const { return kTopBarH + kToolbarH + kCanvasToolbarH + (viewport.show_rulers ? kRulerH : 0.0f); }
     float BottomTotal() const { return (show_bottom_dock ? (kSplitW + bottom_dock_height) : 0.0f) + kStatusBarH; }
 
     float ViewportWidth() const { return std::max(100.0f, (float)win_w - LeftTotal() - RightTotal()); }
@@ -3308,35 +3490,23 @@ struct StudioUI::Impl {
 
         if (auto* bd = ui_doc->GetElementById("bottom-dock")) bd->SetClass("hidden", !show_bottom_dock);
         if (auto* sb = ui_doc->GetElementById("split-bottom")) sb->SetClass("hidden", !show_bottom_dock);
-        if (auto* rc = ui_doc->GetElementById("ruler-corner")) rc->SetClass("hidden", !(show_rulers && show_left_ruler));
-        if (auto* rl = ui_doc->GetElementById("ruler-left")) rl->SetClass("hidden", !(show_rulers && show_left_ruler));
+        if (auto* rc = ui_doc->GetElementById("ruler-corner")) rc->SetClass("hidden", !(viewport.show_rulers && viewport.show_left_ruler));
+        if (auto* rl = ui_doc->GetElementById("ruler-left")) rl->SetClass("hidden", !(viewport.show_rulers && viewport.show_left_ruler));
 
         overlay_dirty = true;
     }
 
-    // Multi-selection
-    std::vector<int> selected_ids;
-    int selection_anchor_id = 0;
+    CommandHistory history;
+    ViewportController viewport;
+    GizmoManipulator gizmo;
 
-    int PrimaryId() const {
-        if (!selected_ids.empty()) return selected_ids.back();
-        return doc ? doc->root_id : 0;
-    }
-
-    bool IsSelected(int id) const {
-        return std::find(selected_ids.begin(), selected_ids.end(), id) != selected_ids.end();
-    }
-
-    void SetSingleSelection(int id) {
-        selected_ids.clear();
-        selected_ids.push_back(id);
-        selection_anchor_id = id;
-    }
+    int PrimaryId() const { return gizmo.PrimaryId(doc); }
+    bool IsSelected(int id) const { return gizmo.IsSelected(id); }
+    void SetSingleSelection(int id) { gizmo.SetSingleSelection(id); }
 
     bool play_mode = false;
     bool hand_tool = false;
     bool safe_area = true;
-    bool show_grid = true;
     enum class BgStyle { Dark, White, Gray, Gta, Custom };
     BgStyle bg_style = BgStyle::Dark;
     RmlColor canvas_bg_color{14, 17, 23, 255};
@@ -3364,6 +3534,84 @@ struct StudioUI::Impl {
     std::string last_highlighted_code;
     std::string last_highlighted_tab;
     bool overlay_dirty = true;
+    bool code_dock_dirty_while_hidden = false;
+    int last_zoom_pct = -1;
+    int last_hl_first_line = -1;
+    int last_hl_last_line = -1;
+    int last_gutter_first_line = -1;
+    int last_gutter_last_line = -1;
+
+    struct LayerRowEntry {
+        int node_id = 0;
+        int depth = 0;
+    };
+    std::vector<LayerRowEntry> layer_rows;
+    int last_layers_first_row = -1;
+    int last_layers_last_row = -1;
+    float last_layers_scroll_top = -1.0f;
+
+    struct ArtboardOverlayCache {
+        bool valid = false;
+        int x = 0;
+        int y = 0;
+        int w = 0;
+        int h = 0;
+        bool empty = false;
+        bool safe_hidden = false;
+        bool meta_hidden = false;
+        int doc_w = 0;
+        int doc_h = 0;
+        std::string root_name;
+    } ab_cache;
+
+    struct TelemetryState {
+        static constexpr int kWindow = 30;
+        double interval_ms[kWindow]{};
+        double frame_ms[kWindow]{};
+        double canvas_ms[kWindow]{};
+        double editor_ms[kWindow]{};
+        int count = 0;
+        int cursor = 0;
+        double last_ui_update_sec = 0.0;
+        bool has_last_frame = false;
+        std::chrono::steady_clock::time_point last_frame_tp{};
+
+        void PushSample(double dt_ms, double work_ms, double c_ms, double e_ms) {
+            interval_ms[cursor] = dt_ms;
+            frame_ms[cursor] = work_ms;
+            canvas_ms[cursor] = c_ms;
+            editor_ms[cursor] = e_ms;
+            cursor = (cursor + 1) % kWindow;
+            if (count < kWindow) ++count;
+        }
+
+        void Averages(double& out_work, double& out_canvas, double& out_editor, double& out_fps) const {
+            if (count <= 0) {
+                out_work = out_canvas = out_editor = out_fps = 0.0;
+                return;
+            }
+            double si = 0.0, st = 0.0, sc = 0.0, se = 0.0;
+            for (int i = 0; i < count; ++i) {
+                si += interval_ms[i];
+                st += frame_ms[i];
+                sc += canvas_ms[i];
+                se += editor_ms[i];
+            }
+            const double inv = 1.0 / static_cast<double>(count);
+            const double avg_dt = si * inv;
+            out_work = st * inv;
+            out_canvas = sc * inv;
+            out_editor = se * inv;
+            out_fps = (avg_dt > 0.05) ? std::min(999.0, 1000.0 / avg_dt) : 0.0;
+        }
+    } telemetry;
+
+    std::vector<DiagnosticItem> diagnostics;
+    bool diag_dirty = true;
+    uint64_t last_diag_rev = 0;
+    uint64_t last_diag_log_seq = 0;
+    std::string live_code_override_tab;
+    std::string live_code_override_src;
 
     enum class ColorTarget { None, NodeBg, NodeBorder, NodeFg, CanvasBg, NodeGrid };
     ColorTarget cp_target = ColorTarget::None;
@@ -3472,6 +3720,8 @@ struct StudioUI::Impl {
         // Code Dock
         set_span("tab-code-rml", "Structure", "Estrutura");
         set_span("tab-code-rcss", "Styles", "Estilos");
+        set_span("tab-code-problems", "Problems", "Problemas");
+        set_title("btn-clean-rcss", "Remove all unused RCSS rules (Ctrl+Z to undo)", "Remover todas as regras RCSS sobrando (Ctrl+Z desfaz)");
         set_title("btn-expand-code", "Expand / Collapse Script Editor", "Expandir / Recolher Editor de Script");
         set_id("lbl-expand-code", code_expanded ? "Collapse" : "Expand", code_expanded ? "Recolher" : "Expandir");
         set_span("btn-copy-code", "Copy code", "Copiar c&#243;digo");
@@ -3510,6 +3760,10 @@ struct StudioUI::Impl {
         set_title("rh-fixed", "Fixed height", "Altura fixa");
         set_title("rh-hug", "Hug contents", "Ajustar ao conte&#250;do (Hug)");
         set_title("rh-fill", "Fill container", "Preencher container (Fill)");
+        set_id("lbl-cap-posmode", "Position Mode", "Posicionamento");
+        set_title("pos-static", "Normal flow with margin offset (Static)", "Fluxo normal com deslocamento via margin (Static)");
+        set_title("pos-relative", "Relative offset within flow (Relative)", "Deslocamento relativo sem afetar vizinhos (Relative)");
+        set_title("pos-absolute", "Free absolute positioning (Absolute)", "Posicionamento livre absoluto (Absolute)");
         set_id("lbl-cap-unit", "Unit", "Unidade");
 
         set_id("lbl-sec-constraints", "Constraints", "Ancoragem");
@@ -3583,50 +3837,15 @@ struct StudioUI::Impl {
         set_title("cp-preview-orig", "Original color (click to restore)", "Cor original (clique para restaurar)");
     }
 
-    std::vector<RmlDocument> undo_stack;
-    std::vector<RmlDocument> redo_stack;
-    static constexpr size_t kMaxHistory = 40;
-
-    float pan_x = 300.0f;
-    float pan_y = 180.0f;
-    float zoom = 0.40f;
-
-    bool panning = false;
-    int pan_start_mx = 0;
-    int pan_start_my = 0;
-    float pan_start_x = 0.0f;
-    float pan_start_y = 0.0f;
-
-    enum class DragMode { None, Move, Resize };
-    DragMode drag_mode = DragMode::None;
-    bool drag_pending = false;
-    int drag_down_mx = 0;
-    int drag_down_my = 0;
-    bool drag_did_move = false;
-    bool drag_transform_ui_dirty = false;
-    int drag_handle = -1;
-    float drag_start_sx = 0.0f;
-    float drag_start_sy = 0.0f;
-    float orig_x = 0.0f;
-    float orig_y = 0.0f;
-    float orig_w = 0.0f;
-    float orig_h = 0.0f;
-    struct DragOrigNode { int id; float x; float y; float w; float h; };
-    std::vector<DragOrigNode> drag_multi_orig;
-    std::vector<int> drag_dirty_node_ids;
-
-    bool snap_guides = true;
-    struct SmartGuideLine {
-        bool vertical = true;
-        float coord = 0.0f;
-        float span_min = 0.0f;
-        float span_max = 0.0f;
-    };
-    std::vector<SmartGuideLine> active_guides;
-
     int mouse_x = 0;
     int mouse_y = 0;
+    int pending_mouse_x = 0;
+    int pending_mouse_y = 0;
+    bool mouse_moved_this_frame = false;
+    int hovered_node_id = -1;
     bool space_down = false;
+
+    void FlushPendingMouseMove();
 
     uint64_t toast_hide_at_ms = 0;
     bool toast_visible = false;
@@ -3673,7 +3892,7 @@ struct StudioUI::Impl {
             if (!self) return;
             if (is_popup_item || action == "select_node" || action == "toggle_collapse" ||
                 action == "toggle_vis" || action == "toggle_lock" || action == "dup_node" ||
-                action == "del_node" || action == "empty_add") {
+                action == "del_node" || action == "empty_add" || action == "jump_problem") {
                 ev.StopPropagation();
             }
             bool ctrl = IsCtrlDown(self->window) || ev.GetParameter<bool>("ctrl_key", false);
@@ -3696,326 +3915,64 @@ struct StudioUI::Impl {
     std::vector<std::unique_ptr<ChangeHandler>> change_listeners;
     std::vector<std::unique_ptr<ClickHandler>> layer_listeners;
     std::vector<std::unique_ptr<ClickHandler>> popup_listeners;
+    std::vector<std::unique_ptr<ClickHandler>> problem_listeners;
 
     void PushUndo() {
         if (!doc) return;
-        undo_stack.push_back(*doc);
-        if (undo_stack.size() > kMaxHistory) undo_stack.erase(undo_stack.begin());
-        redo_stack.clear();
+        history.PushSnapshot(*doc);
         SetSavedState(true);
     }
 
     void Undo() {
-        if (!doc || undo_stack.empty()) return;
-        redo_stack.push_back(*doc);
-        *doc = std::move(undo_stack.back());
-        undo_stack.pop_back();
-        doc->Touch();
+        if (!doc || !history.Undo(*doc)) return;
+        live_code_override_tab.clear();
+        live_code_override_src.clear();
+        diag_dirty = true;
+        gizmo.PruneMissingSelection(*doc);
+        if (engine) engine->SyncAndRenderCanvas(*doc, true);
         SyncUIFromDoc(true);
+        RefreshDiagnostics(true);
         ShowToast(Tr("Action undone", "Ação desfeita"));
     }
 
     void Redo() {
-        if (!doc || redo_stack.empty()) return;
-        undo_stack.push_back(*doc);
-        *doc = std::move(redo_stack.back());
-        redo_stack.pop_back();
-        doc->Touch();
+        if (!doc || !history.Redo(*doc)) return;
+        live_code_override_tab.clear();
+        live_code_override_src.clear();
+        diag_dirty = true;
+        gizmo.PruneMissingSelection(*doc);
+        if (engine) engine->SyncAndRenderCanvas(*doc, true);
         SyncUIFromDoc(true);
+        RefreshDiagnostics(true);
         ShowToast(Tr("Action redone", "Ação refeita"));
     }
 
     bool GetNodeCanvasBounds(int id, float& wx, float& wy, float& ww, float& wh) const {
-        if (!doc) return false;
-        const auto* n = doc->FindNode(id);
-        if (!n) return false;
-        if (engine && engine->GetCanvasElementRect(id, wx, wy, ww, wh)) {
-            ww = std::max(1.0f, ww);
-            wh = std::max(1.0f, wh);
-            return true;
-        }
-        doc->GetWorldPos(id, wx, wy);
-        ww = n->width;
-        wh = n->height;
-        return true;
+        return gizmo.GetNodeCanvasBounds(doc, engine, id, wx, wy, ww, wh);
+    }
+
+    bool IsNodeFlowManaged(const RmlNode& n) const {
+        return gizmo.IsNodeFlowManaged(doc, n);
+    }
+
+    void ComputeAndApplyFlowDragMove(int node_id, float cx, float cy) {
+        gizmo.ComputeAndApplyFlowDragMove(doc, engine, node_id, cx, cy);
     }
 
     void GetParentCanvasOrigin(int parent_id, float& ox, float& oy, int child_id = -1) const {
-        if (child_id > 0 && engine && engine->GetCanvasElementOffsetParentOrigin(child_id, ox, oy)) {
-            return;
-        }
-        ox = 0.0f;
-        oy = 0.0f;
-        if (!doc || parent_id == doc->root_id) return;
-        float pw = 0.0f, ph = 0.0f;
-        GetNodeCanvasBounds(parent_id, ox, oy, pw, ph);
-    }
-
-    bool IsInDragOrigSet(int node_id) const {
-        for (const auto& d : drag_multi_orig) {
-            if (d.id == node_id) return true;
-        }
-        return false;
+        gizmo.GetParentCanvasOrigin(doc, engine, parent_id, ox, oy, child_id);
     }
 
     void RestoreSubtreeForConstraintDrag(const RmlDocument& snapshot, int container_id) {
-        if (!doc) return;
-        const auto* c = doc->FindNode(container_id);
-        if (!c) return;
-        std::vector<int> stack = c->children;
-        while (!stack.empty()) {
-            int cid = stack.back();
-            stack.pop_back();
-            if (auto* cur = doc->FindNode(cid)) {
-                if (const auto* orig = snapshot.FindNode(cid)) {
-                    cur->x = orig->x;
-                    cur->y = orig->y;
-                    cur->width = orig->width;
-                    cur->height = orig->height;
-                }
-                for (int sub : cur->children) stack.push_back(sub);
-            }
-        }
+        gizmo.RestoreSubtreeForConstraintDrag(doc, snapshot, container_id);
     }
 
     void ComputeDragSnapMove(int primary_id, float raw_dx, float raw_dy, bool bypass_snap, float& out_dx, float& out_dy) {
-        active_guides.clear();
-        out_dx = raw_dx;
-        out_dy = raw_dy;
-        if (!snap_guides || bypass_snap || !doc) return;
-        const auto* pn = doc->FindNode(primary_id);
-        if (!pn) return;
-
-        float ox = 0.0f, oy = 0.0f;
-        GetParentCanvasOrigin(pn->parent_id, ox, oy, pn->id);
-        float px = ox + orig_x + raw_dx;
-        float py = oy + orig_y + raw_dy;
-        float pw = std::max(1.0f, orig_w);
-        float ph = std::max(1.0f, orig_h);
-        if (!drag_multi_orig.empty()) {
-            for (const auto& d : drag_multi_orig) {
-                if (d.id == primary_id) {
-                    px = ox + d.x + raw_dx;
-                    py = oy + d.y + raw_dy;
-                    pw = std::max(1.0f, d.w);
-                    ph = std::max(1.0f, d.h);
-                    break;
-                }
-            }
-        }
-
-        struct RefTarget { float coord; float s0; float s1; };
-        std::vector<RefTarget> refs_x;
-        std::vector<RefTarget> refs_y;
-
-        auto push_rect_refs = [&](float rx, float ry, float rw, float rh) {
-            refs_x.push_back({rx, ry, ry + rh});
-            refs_x.push_back({rx + rw * 0.5f, ry, ry + rh});
-            refs_x.push_back({rx + rw, ry, ry + rh});
-            refs_y.push_back({ry, rx, rx + rw});
-            refs_y.push_back({ry + rh * 0.5f, rx, rx + rw});
-            refs_y.push_back({ry + rh, rx, rx + rw});
-        };
-
-        // Artboard bounds & centers
-        push_rect_refs(0.0f, 0.0f, (float)doc->screen_width, (float)doc->screen_height);
-        if (pn->parent_id != doc->root_id) {
-            float prx = 0.0f, pry = 0.0f, prw = 0.0f, prh = 0.0f;
-            if (GetNodeCanvasBounds(pn->parent_id, prx, pry, prw, prh)) {
-                push_rect_refs(prx, pry, prw, prh);
-            }
-        }
-        // Siblings in same parent
-        if (const auto* parent = doc->FindNode(pn->parent_id)) {
-            for (int sib_id : parent->children) {
-                if (sib_id == primary_id || IsInDragOrigSet(sib_id)) continue;
-                const auto* sib = doc->FindNode(sib_id);
-                if (!sib || !sib->visible) continue;
-                float sx = 0.0f, sy = 0.0f, sw = 0.0f, sh = 0.0f;
-                if (GetNodeCanvasBounds(sib_id, sx, sy, sw, sh)) {
-                    push_rect_refs(sx, sy, sw, sh);
-                }
-            }
-        }
-
-        float thresh = std::clamp(6.0f / std::max(0.25f, zoom), 2.5f, 14.0f);
-        float edges_x[3] = {px, px + pw * 0.5f, px + pw};
-        float best_dx = 0.0f;
-        float best_ax = thresh + 0.001f;
-        for (float ex : edges_x) {
-            for (const auto& rx : refs_x) {
-                float diff = rx.coord - ex;
-                if (std::fabs(diff) < best_ax) {
-                    best_ax = std::fabs(diff);
-                    best_dx = diff;
-                }
-            }
-        }
-        if (best_ax <= thresh) {
-            out_dx += best_dx;
-            px += best_dx;
-        }
-
-        float edges_y[3] = {py, py + ph * 0.5f, py + ph};
-        float best_dy = 0.0f;
-        float best_ay = thresh + 0.001f;
-        for (float ey : edges_y) {
-            for (const auto& ry : refs_y) {
-                float diff = ry.coord - ey;
-                if (std::fabs(diff) < best_ay) {
-                    best_ay = std::fabs(diff);
-                    best_dy = diff;
-                }
-            }
-        }
-        if (best_ay <= thresh) {
-            out_dy += best_dy;
-            py += best_dy;
-        }
-
-        constexpr float kEps = 0.55f;
-        float final_ex[3] = {px, px + pw * 0.5f, px + pw};
-        for (float ex : final_ex) {
-            bool matched = false;
-            float mn = py, mx = py + ph;
-            for (const auto& rx : refs_x) {
-                if (std::fabs(rx.coord - ex) <= kEps) {
-                    matched = true;
-                    mn = std::min(mn, rx.s0);
-                    mx = std::max(mx, rx.s1);
-                }
-            }
-            if (matched) active_guides.push_back({true, ex, mn, mx});
-        }
-        float final_ey[3] = {py, py + ph * 0.5f, py + ph};
-        for (float ey : final_ey) {
-            bool matched = false;
-            float mn = px, mx = px + pw;
-            for (const auto& ry : refs_y) {
-                if (std::fabs(ry.coord - ey) <= kEps) {
-                    matched = true;
-                    mn = std::min(mn, ry.s0);
-                    mx = std::max(mx, ry.s1);
-                }
-            }
-            if (matched) active_guides.push_back({false, ey, mn, mx});
-        }
+        gizmo.ComputeDragSnapMove(doc, engine, viewport, primary_id, raw_dx, raw_dy, bypass_snap, out_dx, out_dy);
     }
 
     void ComputeDragSnapResize(int node_id, int handle, bool bypass_snap, float& nx, float& ny, float& nw, float& nh) {
-        active_guides.clear();
-        if (!snap_guides || bypass_snap || !doc) return;
-        const auto* pn = doc->FindNode(node_id);
-        if (!pn) return;
-
-        float ox = 0.0f, oy = 0.0f;
-        GetParentCanvasOrigin(pn->parent_id, ox, oy, pn->id);
-        float px = ox + nx;
-        float py = oy + ny;
-
-        struct RefTarget { float coord; float s0; float s1; };
-        std::vector<RefTarget> refs_x;
-        std::vector<RefTarget> refs_y;
-        auto push_rect_refs = [&](float rx, float ry, float rw, float rh) {
-            refs_x.push_back({rx, ry, ry + rh});
-            refs_x.push_back({rx + rw * 0.5f, ry, ry + rh});
-            refs_x.push_back({rx + rw, ry, ry + rh});
-            refs_y.push_back({ry, rx, rx + rw});
-            refs_y.push_back({ry + rh * 0.5f, rx, rx + rw});
-            refs_y.push_back({ry + rh, rx, rx + rw});
-        };
-        push_rect_refs(0.0f, 0.0f, (float)doc->screen_width, (float)doc->screen_height);
-        if (pn->parent_id != doc->root_id) {
-            float prx = 0.0f, pry = 0.0f, prw = 0.0f, prh = 0.0f;
-            if (GetNodeCanvasBounds(pn->parent_id, prx, pry, prw, prh)) {
-                push_rect_refs(prx, pry, prw, prh);
-            }
-        }
-        if (const auto* parent = doc->FindNode(pn->parent_id)) {
-            for (int sib_id : parent->children) {
-                if (sib_id == node_id) continue;
-                const auto* sib = doc->FindNode(sib_id);
-                if (!sib || !sib->visible) continue;
-                float sx = 0.0f, sy = 0.0f, sw = 0.0f, sh = 0.0f;
-                if (GetNodeCanvasBounds(sib_id, sx, sy, sw, sh)) {
-                    push_rect_refs(sx, sy, sw, sh);
-                }
-            }
-        }
-
-        float thresh = std::clamp(6.0f / std::max(0.25f, zoom), 2.5f, 14.0f);
-        bool move_l = (handle == 0 || handle == 6 || handle == 7);
-        bool move_r = (handle == 2 || handle == 3 || handle == 4);
-        bool move_t = (handle == 0 || handle == 1 || handle == 2);
-        bool move_b = (handle == 4 || handle == 5 || handle == 6);
-
-        if (move_l) {
-            float best = thresh + 0.001f, delta = 0.0f;
-            for (const auto& rx : refs_x) {
-                float d = rx.coord - px;
-                if (std::fabs(d) < best && (nw - d) >= 12.0f) { best = std::fabs(d); delta = d; }
-            }
-            if (best <= thresh) { nx += delta; px += delta; nw -= delta; }
-        } else if (move_r) {
-            float right_x = px + nw;
-            float best = thresh + 0.001f, delta = 0.0f;
-            for (const auto& rx : refs_x) {
-                float d = rx.coord - right_x;
-                if (std::fabs(d) < best && (nw + d) >= 12.0f) { best = std::fabs(d); delta = d; }
-            }
-            if (best <= thresh) { nw += delta; }
-        }
-
-        if (move_t) {
-            float best = thresh + 0.001f, delta = 0.0f;
-            for (const auto& ry : refs_y) {
-                float d = ry.coord - py;
-                if (std::fabs(d) < best && (nh - d) >= 12.0f) { best = std::fabs(d); delta = d; }
-            }
-            if (best <= thresh) { ny += delta; py += delta; nh -= delta; }
-        } else if (move_b) {
-            float bot_y = py + nh;
-            float best = thresh + 0.001f, delta = 0.0f;
-            for (const auto& ry : refs_y) {
-                float d = ry.coord - bot_y;
-                if (std::fabs(d) < best && (nh + d) >= 12.0f) { best = std::fabs(d); delta = d; }
-            }
-            if (best <= thresh) { nh += delta; }
-        }
-
-        constexpr float kEps = 0.55f;
-        if (move_l) {
-            float mn = py, mx = py + nh;
-            bool m = false;
-            for (const auto& rx : refs_x) {
-                if (std::fabs(rx.coord - px) <= kEps) { m = true; mn = std::min(mn, rx.s0); mx = std::max(mx, rx.s1); }
-            }
-            if (m) active_guides.push_back({true, px, mn, mx});
-        }
-        if (move_r) {
-            float rx_cur = px + nw, mn = py, mx = py + nh;
-            bool m = false;
-            for (const auto& rx : refs_x) {
-                if (std::fabs(rx.coord - rx_cur) <= kEps) { m = true; mn = std::min(mn, rx.s0); mx = std::max(mx, rx.s1); }
-            }
-            if (m) active_guides.push_back({true, rx_cur, mn, mx});
-        }
-        if (move_t) {
-            float mn = px, mx = px + nw;
-            bool m = false;
-            for (const auto& ry : refs_y) {
-                if (std::fabs(ry.coord - py) <= kEps) { m = true; mn = std::min(mn, ry.s0); mx = std::max(mx, ry.s1); }
-            }
-            if (m) active_guides.push_back({false, py, mn, mx});
-        }
-        if (move_b) {
-            float by_cur = py + nh, mn = px, mx = px + nw;
-            bool m = false;
-            for (const auto& ry : refs_y) {
-                if (std::fabs(ry.coord - by_cur) <= kEps) { m = true; mn = std::min(mn, ry.s0); mx = std::max(mx, ry.s1); }
-            }
-            if (m) active_guides.push_back({false, by_cur, mn, mx});
-        }
+        gizmo.ComputeDragSnapResize(doc, engine, viewport, node_id, handle, bypass_snap, nx, ny, nw, nh);
     }
 
     void AlignSelection(int mode) {
@@ -4023,7 +3980,7 @@ struct StudioUI::Impl {
         if (!doc) return;
         struct Item { int id; float wx; float wy; float ww; float wh; float ox; float oy; };
         std::vector<Item> items;
-        for (int sid : selected_ids) {
+        for (int sid : gizmo.selected_ids) {
             if (sid == doc->root_id) continue;
             const auto* n = doc->FindNode(sid);
             if (!n || n->locked) continue;
@@ -4060,6 +4017,7 @@ struct StudioUI::Impl {
         PushUndo();
         for (const auto& it : items) {
             if (auto* n = doc->FindNode(it.id)) {
+                if (IsNodeFlowManaged(*n)) continue;
                 if (mode == 0) n->x = std::round(ref_x - it.ox);
                 else if (mode == 1) n->x = std::round(ref_x + (ref_w - it.ww) * 0.5f - it.ox);
                 else if (mode == 2) n->x = std::round(ref_x + ref_w - it.ww - it.ox);
@@ -4076,7 +4034,7 @@ struct StudioUI::Impl {
         if (!doc) return;
         struct Item { int id; float wx; float wy; float ww; float wh; float ox; float oy; };
         std::vector<Item> items;
-        for (int sid : selected_ids) {
+        for (int sid : gizmo.selected_ids) {
             if (sid == doc->root_id) continue;
             const auto* n = doc->FindNode(sid);
             if (!n || n->locked) continue;
@@ -4104,9 +4062,11 @@ struct StudioUI::Impl {
         float cursor = start_edge + (horizontal ? items.front().ww : items.front().wh) + gap;
         for (size_t i = 1; i + 1 < items.size(); ++i) {
             if (auto* n = doc->FindNode(items[i].id)) {
-                if (horizontal) n->x = std::round(cursor - items[i].ox);
-                else n->y = std::round(cursor - items[i].oy);
-                n->modified_transform = true;
+                if (!IsNodeFlowManaged(*n)) {
+                    if (horizontal) n->x = std::round(cursor - items[i].ox);
+                    else n->y = std::round(cursor - items[i].oy);
+                    n->modified_transform = true;
+                }
             }
             cursor += (horizontal ? items[i].ww : items[i].wh) + gap;
         }
@@ -4163,52 +4123,17 @@ struct StudioUI::Impl {
         return {};
     }
 
-    void SyncRulers() {
-        if (!ui_doc) return;
-        float vw = ViewportWidth();
-        float vh = ViewportHeight();
-        float origin_x = pan_x - LeftTotal();
-        float origin_y = pan_y - TopTotal();
-        float step = (zoom < 0.25f) ? 400.0f : 200.0f;
-
-        if (auto* rt = ui_doc->GetElementById("ruler-top")) {
-            std::ostringstream ss;
-            float start_c = std::floor((-origin_x) / (step * zoom)) * step;
-            float end_c = (-origin_x + vw) / zoom;
-            for (float c = start_c; c <= end_c; c += step) {
-                int sx = (int)std::round(origin_x + c * zoom);
-                if (sx >= -40 && sx <= (int)vw) {
-                    ss << "<div class=\"rtick-x\" style=\"left:" << sx << "px;\">" << (int)std::round(c) << "</div>";
-                }
-            }
-            rt->SetInnerRML(ss.str());
-        }
-
-        if (show_rulers && show_left_ruler) {
-            if (auto* rl = ui_doc->GetElementById("ruler-left")) {
-                std::ostringstream ss;
-                float start_c = std::floor((-origin_y) / (step * zoom)) * step;
-                float end_c = (-origin_y + vh) / zoom;
-                for (float c = start_c; c <= end_c; c += step) {
-                    int sy = (int)std::round(origin_y + c * zoom);
-                    if (sy >= -20 && sy <= (int)vh) {
-                        ss << "<div class=\"rtick-y\" style=\"top:" << sy << "px;\">" << (int)std::round(c) << "</div>";
-                    }
-                }
-                rl->SetInnerRML(ss.str());
-            }
-        }
-        overlay_dirty = true;
-    }
-
     void SyncArtboardOverlay() {
         if (!overlay_dirty || !ui_doc || !doc) return;
         overlay_dirty = false;
 
-        float cw = (float)doc->screen_width * zoom;
-        float ch = (float)doc->screen_height * zoom;
-        float rel_x = pan_x - LeftTotal();
-        float rel_y = pan_y - TopTotal();
+        const float cw = (float)doc->screen_width * viewport.zoom;
+        const float ch = (float)doc->screen_height * viewport.zoom;
+        const int ix = (int)std::round(viewport.pan_x - LeftTotal());
+        const int iy = (int)std::round(viewport.pan_y - TopTotal());
+        const bool is_empty = (doc->nodes.size() <= 1 && !doc->has_imported_source && !play_mode && cw >= 180.0f && ch >= 140.0f);
+        const int iw = is_empty ? std::max(1, (int)std::round(cw)) : 1;
+        const int ih = is_empty ? std::max(1, (int)std::round(ch)) : 1;
 
         auto set_px = [&](Rml::Element* el, const char* prop, int val) {
             char buf[32];
@@ -4217,52 +4142,66 @@ struct StudioUI::Impl {
         };
 
         if (auto* ab = ui_doc->GetElementById("artboard-box")) {
-            set_px(ab, "left", (int)std::round(rel_x));
-            set_px(ab, "top", (int)std::round(rel_y));
-            set_px(ab, "width", std::max(1, (int)std::round(cw)));
-            set_px(ab, "height", std::max(1, (int)std::round(ch)));
+            if (!ab_cache.valid || ab_cache.x != ix) set_px(ab, "left", ix);
+            if (!ab_cache.valid || ab_cache.y != iy) set_px(ab, "top", iy);
+            if (!ab_cache.valid || ab_cache.w != iw) set_px(ab, "width", iw);
+            if (!ab_cache.valid || ab_cache.h != ih) set_px(ab, "height", ih);
         }
 
-        bool is_empty = (doc->nodes.size() <= 1 && !doc->has_imported_source && !play_mode && cw >= 180.0f && ch >= 140.0f);
-        if (auto* ec = ui_doc->GetElementById("canvas-empty-center")) {
-            ec->SetClass("hidden", !is_empty);
+        const bool safe_hidden = (!safe_area && !is_empty);
+        const bool meta_hidden = (play_mode || ch < 70.0f);
+        if (!ab_cache.valid || ab_cache.empty != is_empty) {
+            if (auto* ec = ui_doc->GetElementById("canvas-empty-center")) ec->SetClass("hidden", !is_empty);
         }
-        if (auto* sl = ui_doc->GetElementById("safe-area-label")) {
-            sl->SetClass("hidden", !safe_area && !is_empty);
+        if (!ab_cache.valid || ab_cache.safe_hidden != safe_hidden) {
+            if (auto* sl = ui_doc->GetElementById("safe-area-label")) sl->SetClass("hidden", safe_hidden);
         }
-        if (auto* rn = ui_doc->GetElementById("artboard-root-name")) {
-            const RmlNode* r = doc->FindNode(doc->root_id);
-            rn->SetInnerRML(EscapeXml(r && !r->name.empty() ? r->name : "screen-root"));
+        if (!ab_cache.valid || ab_cache.meta_hidden != meta_hidden) {
+            if (auto* am = ui_doc->GetElementById("artboard-meta")) am->SetClass("hidden", meta_hidden);
         }
-        if (auto* as = ui_doc->GetElementById("artboard-size-lbl")) {
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "%d &#215; %d px", doc->screen_width, doc->screen_height);
-            as->SetInnerRML(buf);
+
+        const RmlNode* r = doc->FindNode(doc->root_id);
+        const std::string rname = (r && !r->name.empty()) ? r->name : "screen-root";
+        if (!ab_cache.valid || ab_cache.root_name != rname) {
+            if (auto* rn = ui_doc->GetElementById("artboard-root-name")) SetElementTextFast(rn, rname);
+            ab_cache.root_name = rname;
         }
-        if (auto* am = ui_doc->GetElementById("artboard-meta")) {
-            am->SetClass("hidden", play_mode || ch < 70.0f);
+        if (!ab_cache.valid || ab_cache.doc_w != doc->screen_width || ab_cache.doc_h != doc->screen_height) {
+            if (auto* as = ui_doc->GetElementById("artboard-size-lbl")) {
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%d \xC3\x97 %d px", doc->screen_width, doc->screen_height);
+                SetElementTextFast(as, buf);
+            }
+            ab_cache.doc_w = doc->screen_width;
+            ab_cache.doc_h = doc->screen_height;
         }
+
+        ab_cache.valid = true;
+        ab_cache.x = ix;
+        ab_cache.y = iy;
+        ab_cache.w = iw;
+        ab_cache.h = ih;
+        ab_cache.empty = is_empty;
+        ab_cache.safe_hidden = safe_hidden;
+        ab_cache.meta_hidden = meta_hidden;
     }
 
     void FitViewport() {
         if (!doc) return;
-        float vw = ViewportWidth();
-        float vh = ViewportHeight();
-        float zx = (vw - 60.0f) / std::max(1.0f, (float)doc->screen_width);
-        float zy = (vh - 60.0f) / std::max(1.0f, (float)doc->screen_height);
-        zoom = std::clamp(std::min(zx, zy), 0.10f, 2.0f);
-        pan_x = LeftTotal() + (vw - doc->screen_width * zoom) * 0.5f;
-        pan_y = TopTotal() + (vh - doc->screen_height * zoom) * 0.5f;
+        viewport.FitToViewport(LeftTotal(), TopTotal(), ViewportWidth(), ViewportHeight(), doc->screen_width, doc->screen_height);
         UpdateZoomLabel();
-        SyncRulers();
+        overlay_dirty = true;
     }
 
     void UpdateZoomLabel() {
         if (!ui_doc) return;
+        const int pct = (int)std::round(viewport.zoom * 100.0f);
+        if (pct == last_zoom_pct) return;
+        last_zoom_pct = pct;
         char buf[32];
-        std::snprintf(buf, sizeof(buf), "%d%%", (int)std::round(zoom * 100.0f));
-        if (auto* el = ui_doc->GetElementById("lbl-zoom")) el->SetInnerRML(buf);
-        if (auto* el = ui_doc->GetElementById("lbl-zoom-ctrl")) el->SetInnerRML(buf);
+        std::snprintf(buf, sizeof(buf), "%d%%", pct);
+        SetElementTextFast(ui_doc->GetElementById("lbl-zoom"), buf);
+        SetElementTextFast(ui_doc->GetElementById("lbl-zoom-ctrl"), buf);
     }
 
     int ResolveTargetContainer() const {
@@ -4336,34 +4275,34 @@ struct StudioUI::Impl {
 
     void SelectNodeWithMods(int id, bool ctrl, bool shift) {
         if (!doc) return;
-        if (shift && !selected_ids.empty()) {
+        if (shift && !gizmo.selected_ids.empty()) {
             std::vector<int> order;
             CollectVisibleTreeOrder(doc->root_id, order);
-            int anchor = (selection_anchor_id > 0) ? selection_anchor_id : PrimaryId();
+            int anchor = (gizmo.selection_anchor_id > 0) ? gizmo.selection_anchor_id : PrimaryId();
             auto it_a = std::find(order.begin(), order.end(), anchor);
             auto it_b = std::find(order.begin(), order.end(), id);
             if (it_a != order.end() && it_b != order.end()) {
                 size_t ia = (size_t)(it_a - order.begin());
                 size_t ib = (size_t)(it_b - order.begin());
                 if (ia > ib) std::swap(ia, ib);
-                if (!ctrl) selected_ids.clear();
+                if (!ctrl) gizmo.selected_ids.clear();
                 for (size_t i = ia; i <= ib; ++i) {
-                    if (!IsSelected(order[i])) selected_ids.push_back(order[i]);
+                    if (!IsSelected(order[i])) gizmo.selected_ids.push_back(order[i]);
                 }
                 SyncUIFromDoc(true);
                 return;
             }
         }
         if (ctrl) {
-            auto it = std::find(selected_ids.begin(), selected_ids.end(), id);
-            if (it != selected_ids.end()) {
-                if (selected_ids.size() > 1) selected_ids.erase(it);
+            auto it = std::find(gizmo.selected_ids.begin(), gizmo.selected_ids.end(), id);
+            if (it != gizmo.selected_ids.end()) {
+                if (gizmo.selected_ids.size() > 1) gizmo.selected_ids.erase(it);
             } else {
                 if (id != doc->root_id) {
-                    selected_ids.erase(std::remove(selected_ids.begin(), selected_ids.end(), doc->root_id), selected_ids.end());
+                    gizmo.selected_ids.erase(std::remove(gizmo.selected_ids.begin(), gizmo.selected_ids.end(), doc->root_id), gizmo.selected_ids.end());
                 }
-                selected_ids.push_back(id);
-                selection_anchor_id = id;
+                gizmo.selected_ids.push_back(id);
+                gizmo.selection_anchor_id = id;
             }
             SyncUIFromDoc(true);
             return;
@@ -4398,6 +4337,8 @@ struct StudioUI::Impl {
                 DuplicateSpecificNode(cmd.node_id);
             } else if (cmd.action == "del_node") {
                 DeleteSpecificNode(cmd.node_id);
+            } else if (cmd.action == "jump_problem") {
+                JumpToProblem(cmd.node_id);
             } else {
                 HandleButton(cmd.action);
             }
@@ -4716,10 +4657,10 @@ struct StudioUI::Impl {
             };
         } else if (menu == "view") {
             items = {
-                {"pop-rul", show_rulers ? Tr("Hide Rulers", "Ocultar Réguas") : Tr("Show Rulers", "Mostrar Réguas"), "toggle_rulers"},
-                {"pop-rlat", show_left_ruler ? Tr("Hide Left Ruler", "Ocultar Régua Lateral") : Tr("Show Left Ruler", "Mostrar Régua Lateral"), "toggle_left_ruler"},
-                {"pop-grd", show_grid ? Tr("Hide Grid", "Ocultar Grade") : Tr("Show Grid", "Mostrar Grade"), "toggle_grid"},
-                {"pop-snap", snap_guides ? Tr("Disable Smart Guides", "Desativar Guias Inteligentes") : Tr("Enable Smart Guides", "Ativar Guias Inteligentes"), "toggle_snap"},
+                {"pop-rul", viewport.show_rulers ? Tr("Hide Rulers", "Ocultar Réguas") : Tr("Show Rulers", "Mostrar Réguas"), "toggle_rulers"},
+                {"pop-rlat", viewport.show_left_ruler ? Tr("Hide Left Ruler", "Ocultar Régua Lateral") : Tr("Show Left Ruler", "Mostrar Régua Lateral"), "toggle_left_ruler"},
+                {"pop-grd", viewport.show_grid ? Tr("Hide Grid", "Ocultar Grade") : Tr("Show Grid", "Mostrar Grade"), "toggle_grid"},
+                {"pop-snap", gizmo.snap_guides ? Tr("Disable Smart Guides", "Desativar Guias Inteligentes") : Tr("Enable Smart Guides", "Ativar Guias Inteligentes"), "toggle_snap"},
                 {"pop-bot", show_bottom_dock ? Tr("Hide Code Panel", "Ocultar Painel de Código") : Tr("Show Code Panel", "Mostrar Painel de Código"), "toggle_bottom_dock"},
                 {"pop-fs", Tr("Fullscreen (F11)", "Tela Cheia (F11)"), "toggle_fullscreen"},
                 {"", "", "", true},
@@ -4801,7 +4742,7 @@ struct StudioUI::Impl {
     void ToggleVisibility(int id) {
         if (!doc) return;
         PushUndo();
-        std::vector<int> targets = (IsSelected(id) && selected_ids.size() > 1) ? selected_ids : std::vector<int>{id};
+        std::vector<int> targets = (IsSelected(id) && gizmo.selected_ids.size() > 1) ? gizmo.selected_ids : std::vector<int>{id};
         for (int tid : targets) {
             if (auto* n = doc->FindNode(tid)) {
                 n->visible = !n->visible;
@@ -4814,7 +4755,7 @@ struct StudioUI::Impl {
 
     void ToggleLock(int id) {
         if (!doc) return;
-        std::vector<int> targets = (IsSelected(id) && selected_ids.size() > 1) ? selected_ids : std::vector<int>{id};
+        std::vector<int> targets = (IsSelected(id) && gizmo.selected_ids.size() > 1) ? gizmo.selected_ids : std::vector<int>{id};
         PushUndo();
         for (int tid : targets) {
             if (tid == doc->root_id) continue;
@@ -4826,7 +4767,7 @@ struct StudioUI::Impl {
 
     void DuplicateSpecificNode(int id) {
         if (!doc) return;
-        std::vector<int> targets = (IsSelected(id) && selected_ids.size() > 1) ? selected_ids : std::vector<int>{id};
+        std::vector<int> targets = (IsSelected(id) && gizmo.selected_ids.size() > 1) ? gizmo.selected_ids : std::vector<int>{id};
         PushUndo();
         std::vector<int> created;
         for (int tid : targets) {
@@ -4835,8 +4776,8 @@ struct StudioUI::Impl {
             if (nid > 0) created.push_back(nid);
         }
         if (!created.empty()) {
-            selected_ids = created;
-            selection_anchor_id = created.back();
+            gizmo.selected_ids = created;
+            gizmo.selection_anchor_id = created.back();
             ShowToast(Tr("Element duplicated", "Elemento duplicado"));
         }
         SyncUIFromDoc(true);
@@ -4844,18 +4785,14 @@ struct StudioUI::Impl {
 
     void DeleteSpecificNode(int id) {
         if (!doc) return;
-        std::vector<int> targets = (IsSelected(id) && selected_ids.size() > 1) ? selected_ids : std::vector<int>{id};
+        std::vector<int> targets = (IsSelected(id) && gizmo.selected_ids.size() > 1) ? gizmo.selected_ids : std::vector<int>{id};
         PushUndo();
         bool any_deleted = false;
         for (int tid : targets) {
             if (tid == doc->root_id) continue;
             if (doc->DeleteNode(tid)) any_deleted = true;
         }
-        selected_ids.erase(
-            std::remove_if(selected_ids.begin(), selected_ids.end(), [&](int sid) { return !doc->FindNode(sid); }),
-            selected_ids.end()
-        );
-        if (selected_ids.empty()) SetSingleSelection(doc->root_id);
+        gizmo.PruneMissingSelection(*doc);
         if (any_deleted) ShowToast(Tr("Element deleted", "Elemento removido"));
         SyncUIFromDoc(true);
     }
@@ -4863,9 +4800,9 @@ struct StudioUI::Impl {
     void UpdateHeaderButtonsUI() {
         if (!ui_doc || !doc) return;
         if (auto* e = ui_doc->GetElementById("vp-pc")) e->SetClass("active", true);
-        if (auto* e = ui_doc->GetElementById("bg-grid")) e->SetClass("selected", show_grid);
-        if (auto* e = ui_doc->GetElementById("btn-canvas-grid")) e->SetClass("control-active", show_grid);
-        if (auto* e = ui_doc->GetElementById("btn-canvas-snap")) e->SetClass("control-active", snap_guides);
+        if (auto* e = ui_doc->GetElementById("bg-grid")) e->SetClass("selected", viewport.show_grid);
+        if (auto* e = ui_doc->GetElementById("btn-canvas-grid")) e->SetClass("control-active", viewport.show_grid);
+        if (auto* e = ui_doc->GetElementById("btn-canvas-snap")) e->SetClass("control-active", gizmo.snap_guides);
         if (auto* sw = ui_doc->GetElementById("swatch-canvas-bg")) {
             RmlColor sw_col = (bg_style == BgStyle::Gta) ? RmlColor{68, 138, 204, 255} : canvas_bg_color;
             sw->SetProperty("background-color", sw_col.ToCss());
@@ -4885,18 +4822,18 @@ struct StudioUI::Impl {
             ex->SetInnerRML(code_expanded ? Tr("Collapse", "Recolher") : Tr("Expand", "Expandir"));
         }
 
-        if (auto* rt = ui_doc->GetElementById("ruler-top-row")) rt->SetClass("hidden", !show_rulers);
+        if (auto* rt = ui_doc->GetElementById("ruler-top-row")) rt->SetClass("hidden", !viewport.show_rulers);
         if (auto* cr = ui_doc->GetElementById("canvas-res-lbl")) {
             char buf[64];
-            std::snprintf(buf, sizeof(buf), "%d &#215; %d", doc->screen_width, doc->screen_height);
-            cr->SetInnerRML(buf);
+            std::snprintf(buf, sizeof(buf), "%d \xC3\x97 %d", doc->screen_width, doc->screen_height);
+            SetElementTextFast(cr, buf);
         }
         if (auto* sbv = ui_doc->GetElementById("sb-vp")) {
             char vp_buf[96];
-            std::snprintf(vp_buf, sizeof(vp_buf), "RML &#183; %dx%d &#183; %s",
+            std::snprintf(vp_buf, sizeof(vp_buf), "RML \xC2\xB7 %dx%d \xC2\xB7 %s",
                           doc->screen_width, doc->screen_height,
                           Tr("Live Canvas", "Canvas em tempo real"));
-            sbv->SetInnerRML(vp_buf);
+            SetElementTextFast(sbv, vp_buf);
         }
         overlay_dirty = true;
     }
@@ -4905,14 +4842,11 @@ struct StudioUI::Impl {
         if (!ui_doc || !doc) return;
         std::string label = "screen-root";
         if (const RmlNode* n = doc->FindNode(PrimaryId())) {
-            if (!n->rml_id.empty()) label = "#" + n->rml_id;
-            else if (!n->name.empty()) label = n->name;
-            else if (!n->rml_class.empty()) label = "." + n->rml_class;
-            else label = n->tag;
+            label = ComputeNodeLabel(*n);
         }
         std::string status = std::string(Tr("Ready", "Pronto")) + " <span class=\"status-sep\">/</span> " + EscapeXml(label);
-        if (selected_ids.size() > 1) {
-            status += " (" + std::to_string(selected_ids.size()) + " " + Tr("selected", "selecionados") + ")";
+        if (gizmo.selected_ids.size() > 1) {
+            status += " (" + std::to_string(gizmo.selected_ids.size()) + " " + Tr("selected", "selecionados") + ")";
         }
         if (auto* el = ui_doc->GetElementById("sb-dom")) el->SetInnerRML(status);
     }
@@ -4954,7 +4888,15 @@ struct StudioUI::Impl {
         if (action == "empty_add") { OpenPopupNearElement("add",  "btn-empty-add", (float)win_w * 0.5f - 115.0f, (float)win_h * 0.45f); return; }
         if (action == "insp_more") { OpenPopupNearElement("edit", "btn-insp-more", (float)win_w - 245.0f, 138.0f); return; }
         if (action == "toggle_lang") {
-            ShowToast(Tr("Shortcuts: V Select | H/Space Pan | Ctrl+Z/Y | Ctrl+D | Del", "Atalhos: V Selecionar | H/Espaço Pan | Ctrl+Z/Y | Ctrl+D | Del"));
+            lang = (lang == UiLang::En) ? UiLang::Pt : UiLang::En;
+            ApplyLanguage();
+            RefreshDiagnostics(true);
+            SyncUIFromDoc(true);
+            ShowToast(Tr("Language switched to English", "Idioma alterado para Portugu\xC3\xAAs (PT-BR)"));
+            return;
+        }
+        if (action == "help") {
+            ShowToast(Tr("Shortcuts: V Select | H/Space Pan | Ctrl+Z/Y | Ctrl+D | Del", "Atalhos: V Selecionar | H/Espa\xC3\xA7o Pan | Ctrl+Z/Y | Ctrl+D | Del"));
             return;
         }
         if (action == "settings") {
@@ -4972,8 +4914,9 @@ struct StudioUI::Impl {
             PushUndo();
             doc->ResetDefaultScreen();
             SetSingleSelection(doc->root_id);
+            has_custom_filename = false;
             if (auto* fn = ui_doc->GetElementById("menu-filename")) {
-                has_custom_filename = false;
+                fn->SetInnerRML(Tr("Untitled Project", "Projeto sem t&#237;tulo"));
             }
             SetSavedState(false);
             FitViewport();
@@ -4986,6 +4929,7 @@ struct StudioUI::Impl {
                 if (engine->ImportRmlFile(path, loaded, err)) {
                     PushUndo();
                     *doc = std::move(loaded);
+                    ApplySmartLayerCollapse(doc->root_id);
                     SetSingleSelection(doc->root_id);
                     if (auto* fn = ui_doc->GetElementById("menu-filename")) {
                         fn->SetInnerRML(EscapeXml(fs::path(path).filename().string()));
@@ -5015,25 +4959,25 @@ struct StudioUI::Impl {
             ToggleVisibility(PrimaryId());
             return;
         } else if (action == "toggle_rulers") {
-            show_rulers = !show_rulers;
+            viewport.show_rulers = !viewport.show_rulers;
             UpdateHeaderButtonsUI();
             ApplyPanelSizes();
-            SyncRulers();
+            overlay_dirty = true;
             return;
         } else if (action == "toggle_left_ruler") {
-            show_left_ruler = !show_left_ruler;
+            viewport.show_left_ruler = !viewport.show_left_ruler;
             ApplyPanelSizes();
-            SyncRulers();
+            overlay_dirty = true;
             return;
         } else if (action == "toggle_grid") {
-            show_grid = !show_grid;
+            viewport.show_grid = !viewport.show_grid;
             UpdateHeaderButtonsUI();
             return;
         } else if (action == "toggle_snap") {
-            snap_guides = !snap_guides;
-            if (!snap_guides) active_guides.clear();
+            gizmo.snap_guides = !gizmo.snap_guides;
+            if (!gizmo.snap_guides) gizmo.active_guides.clear();
             UpdateHeaderButtonsUI();
-            ShowToast(snap_guides ? Tr("Smart guides enabled", "Guias inteligentes ativadas") : Tr("Smart guides disabled", "Guias inteligentes desativadas"));
+            ShowToast(gizmo.snap_guides ? Tr("Smart guides enabled", "Guias inteligentes ativadas") : Tr("Smart guides disabled", "Guias inteligentes desativadas"));
             return;
         } else if (action == "pick_swatch_grid") {
             OpenColorPicker(ColorTarget::NodeGrid, "swatch-grid");
@@ -5045,13 +4989,21 @@ struct StudioUI::Impl {
             show_bottom_dock = !show_bottom_dock;
             UpdateHeaderButtonsUI();
             ApplyPanelSizes();
+            overlay_dirty = true;
+            if (show_bottom_dock) {
+                if (code_dock_dirty_while_hidden) {
+                    SyncCodeDock();
+                } else {
+                    SyncCodeGutter(true);
+                }
+            }
             return;
         } else if (action == "expand_code") {
             code_expanded = !code_expanded;
             bottom_dock_height = code_expanded ? 380.0f : 190.0f;
             UpdateHeaderButtonsUI();
             ApplyPanelSizes();
-            SyncRulers();
+            overlay_dirty = true;
             return;
         } else if (action == "pick_swatch_bg") {
             OpenColorPicker(ColorTarget::NodeBg, "swatch-bg");
@@ -5157,24 +5109,23 @@ struct StudioUI::Impl {
         } else if (action == "fit") {
             FitViewport();
         } else if (action == "z100") {
-            zoom = 1.0f;
-            pan_x = LeftTotal() + 30.0f;
-            pan_y = TopTotal() + 30.0f;
+            viewport.ResetZoom100(LeftTotal(), TopTotal());
             UpdateZoomLabel();
-            SyncRulers();
+            overlay_dirty = true;
         } else if (action == "zoom_in" || action == "zoom_out") {
-            float old_zoom = zoom;
             float factor = (action == "zoom_in") ? 1.15f : (1.0f / 1.15f);
-            zoom = std::clamp(zoom * factor, 0.10f, 4.0f);
             float cx = LeftTotal() + ViewportWidth() * 0.5f;
             float cy = TopTotal() + ViewportHeight() * 0.5f;
-            pan_x = cx - (cx - pan_x) * (zoom / old_zoom);
-            pan_y = cy - (cy - pan_y) * (zoom / old_zoom);
+            viewport.ZoomAtPoint(cx, cy, factor, 0.10f, 4.0f);
             UpdateZoomLabel();
-            SyncRulers();
+            overlay_dirty = true;
         } else if (action == "play") {
             play_mode = !play_mode;
-            drag_mode = DragMode::None;
+            if (play_mode) {
+                engine->MarkCanvasInteractiveDirty();
+                hovered_node_id = -1;
+            }
+            gizmo.drag_mode = GizmoManipulator::DragMode::None;
             overlay_dirty = true;
             if (auto* b = ui_doc->GetElementById("btn-play")) b->SetClass("btn-play-on", play_mode);
             if (auto* lbl = ui_doc->GetElementById("lbl-play")) lbl->SetInnerRML(play_mode ? Tr("Stop", "Parar") : Tr("Preview", "Pr&#233;-visualizar"));
@@ -5184,12 +5135,34 @@ struct StudioUI::Impl {
             hand_tool = false;
         } else if (action == "tool_pan") {
             hand_tool = true;
-        } else if (action == "tab_rml" || action == "tab_rcss") {
-            code_tab = (action == "tab_rcss") ? "RCSS" : "RML";
-            last_code_undo_ms = 0;
-            if (auto* t1 = ui_doc->GetElementById("tab-code-rml")) t1->SetClass("current", code_tab == "RML");
-            if (auto* t2 = ui_doc->GetElementById("tab-code-rcss")) t2->SetClass("current", code_tab == "RCSS");
-            SyncCodeDock();
+        } else if (action == "tab_rml" || action == "tab_rcss" || action == "tab_problems") {
+            std::string target = (action == "tab_rcss") ? "RCSS" : ((action == "tab_problems") ? "PROBLEMS" : "RML");
+            SwitchCodeTab(target);
+            return;
+        } else if (action == "clean_unused_rcss") {
+            if (!doc) return;
+            size_t unused_cnt = 0;
+            for (const auto& d : diagnostics) {
+                if (d.severity == DiagnosticItem::Severity::Unused && d.source == DiagnosticItem::SourceFile::Rcss) {
+                    ++unused_cnt;
+                }
+            }
+            if (unused_cnt == 0 || !doc->has_imported_source) {
+                ShowToast(Tr("No unused RCSS rules to clean", "Nenhuma regra RCSS sobrando para limpar"));
+                return;
+            }
+            PushUndo();
+            size_t removed = RmlDiagnosticsEngine::RemoveUnusedRcssRules(doc->imported_raw_rcss, diagnostics);
+            if (removed > 0) {
+                live_code_override_tab.clear();
+                live_code_override_src.clear();
+                doc->Touch();
+                if (engine) engine->SyncAndRenderCanvas(*doc, true);
+                diag_dirty = true;
+                SyncUIFromDoc(true);
+                RefreshDiagnostics(true);
+                ShowToast(std::to_string(removed) + Tr(" unused RCSS rule(s) removed", " regra(s) RCSS sobrando removida(s)"));
+            }
             return;
         } else if (action == "copy_code") {
             std::string cur_code = GetInputValue("code-editor");
@@ -5219,6 +5192,48 @@ struct StudioUI::Impl {
         } else if (action == "u_px" || action == "u_pct" || action == "u_dp") {
             unit_mode = (action == "u_pct") ? "%" : (action == "u_dp" ? "dp" : "px");
             SyncTransformFieldsOnly();
+        } else if (action == "pos_static" || action == "pos_relative" || action == "pos_absolute") {
+            if (auto* n = doc->FindNode(PrimaryId()); n && n->id != doc->root_id) {
+                PushUndo();
+                RmlPositionMode target_mode = (action == "pos_static")
+                    ? RmlPositionMode::Static
+                    : ((action == "pos_relative") ? RmlPositionMode::Relative : RmlPositionMode::Absolute);
+                if (target_mode == RmlPositionMode::Absolute) {
+                    float ax = 0.0f, ay = 0.0f, aw = n->width, ah = n->height;
+                    if (engine && engine->GetCanvasElementRect(n->id, ax, ay, aw, ah)) {
+                        float ox = 0.0f, oy = 0.0f;
+                        GetParentCanvasOrigin(n->parent_id, ox, oy, n->id);
+                        n->x = std::round(ax - ox);
+                        n->y = std::round(ay - oy);
+                        n->width = std::max(8.0f, std::round(aw));
+                        n->height = std::max(8.0f, std::round(ah));
+                    }
+                    n->pos_mode = RmlPositionMode::Absolute;
+                    n->css_positioned = true;
+                    n->rel_x = 0.0f;
+                    n->rel_y = 0.0f;
+                    n->margin_left = 0.0f;
+                    n->margin_top = 0.0f;
+                    n->has_margin_left = false;
+                    n->has_margin_top = false;
+                } else {
+                    n->pos_mode = target_mode;
+                    n->css_positioned = (target_mode == RmlPositionMode::Relative);
+                    n->anchor_h = 0;
+                    n->anchor_v = 0;
+                    n->rel_x = 0.0f;
+                    n->rel_y = 0.0f;
+                    n->margin_left = 0.0f;
+                    n->margin_top = 0.0f;
+                    n->has_margin_left = false;
+                    n->has_margin_top = false;
+                }
+                n->explicit_anchor_or_margin = true;
+                n->modified_transform = true;
+                n->modified_style = true;
+                doc->Touch();
+                SyncUIFromDoc(true);
+            }
         } else if (action == "btn_align_left") {
             AlignSelection(0);
         } else if (action == "btn_align_hcenter") {
@@ -5290,6 +5305,8 @@ struct StudioUI::Impl {
             if (auto* n = doc->FindNode(PrimaryId())) {
                 PushUndo();
                 n->anchor_h = (action == "ch_right") ? 1 : (action == "ch_lr" ? 2 : (action == "ch_center" ? 3 : (action == "ch_scale" ? 4 : 0)));
+                n->explicit_anchor_or_margin = true;
+                n->modified_transform = true;
                 n->modified_style = true;
                 doc->Touch();
             }
@@ -5297,6 +5314,8 @@ struct StudioUI::Impl {
             if (auto* n = doc->FindNode(PrimaryId())) {
                 PushUndo();
                 n->anchor_v = (action == "cv_bottom") ? 1 : (action == "cv_tb" ? 2 : (action == "cv_center" ? 3 : (action == "cv_scale" ? 4 : 0)));
+                n->explicit_anchor_or_margin = true;
+                n->modified_transform = true;
                 n->modified_style = true;
                 doc->Touch();
             }
@@ -5304,6 +5323,8 @@ struct StudioUI::Impl {
             if (auto* n = doc->FindNode(PrimaryId())) {
                 PushUndo();
                 n->anchor_h = (n->anchor_h == 1) ? 2 : (n->anchor_h == 2 ? 1 : 0);
+                n->explicit_anchor_or_margin = true;
+                n->modified_transform = true;
                 n->modified_style = true;
                 doc->Touch();
             }
@@ -5311,6 +5332,8 @@ struct StudioUI::Impl {
             if (auto* n = doc->FindNode(PrimaryId())) {
                 PushUndo();
                 n->anchor_h = (n->anchor_h == 0) ? 2 : (n->anchor_h == 2 ? 0 : 1);
+                n->explicit_anchor_or_margin = true;
+                n->modified_transform = true;
                 n->modified_style = true;
                 doc->Touch();
             }
@@ -5318,6 +5341,8 @@ struct StudioUI::Impl {
             if (auto* n = doc->FindNode(PrimaryId())) {
                 PushUndo();
                 n->anchor_h = (n->anchor_h == 3) ? 0 : 3;
+                n->explicit_anchor_or_margin = true;
+                n->modified_transform = true;
                 n->modified_style = true;
                 doc->Touch();
             }
@@ -5325,6 +5350,8 @@ struct StudioUI::Impl {
             if (auto* n = doc->FindNode(PrimaryId())) {
                 PushUndo();
                 n->anchor_v = (n->anchor_v == 1) ? 2 : (n->anchor_v == 2 ? 1 : 0);
+                n->explicit_anchor_or_margin = true;
+                n->modified_transform = true;
                 n->modified_style = true;
                 doc->Touch();
             }
@@ -5332,6 +5359,8 @@ struct StudioUI::Impl {
             if (auto* n = doc->FindNode(PrimaryId())) {
                 PushUndo();
                 n->anchor_v = (n->anchor_v == 0) ? 2 : (n->anchor_v == 2 ? 0 : 1);
+                n->explicit_anchor_or_margin = true;
+                n->modified_transform = true;
                 n->modified_style = true;
                 doc->Touch();
             }
@@ -5339,6 +5368,8 @@ struct StudioUI::Impl {
             if (auto* n = doc->FindNode(PrimaryId())) {
                 PushUndo();
                 n->anchor_v = (n->anchor_v == 3) ? 0 : 3;
+                n->explicit_anchor_or_margin = true;
+                n->modified_transform = true;
                 n->modified_style = true;
                 doc->Touch();
             }
@@ -5490,8 +5521,7 @@ struct StudioUI::Impl {
                 std::string path = Platform::OpenFileDialog(window, Tr("Select Image", "Selecionar Imagem"), {{Tr("Images (*.png;*.jpg;*.jpeg;*.bmp)", "Imagens (*.png;*.jpg;*.jpeg;*.bmp)"), "*.png;*.jpg;*.jpeg;*.bmp"}, {Tr("All Files (*.*)", "Todos (*.*)"), "*.*"}});
                 if (!path.empty()) {
                     PushUndo();
-                    n->image_bytes = ReadFileBytes(path);
-                    n->image_src = fs::path(path).filename().string();
+                    doc->SetNodeImageBytes(n->id, fs::path(path).filename().string(), ReadFileBytes(path));
                     doc->Touch();
                 }
             }
@@ -5533,7 +5563,7 @@ struct StudioUI::Impl {
             dot->SetClass("dot-amber-sm", !synced);
         }
         if (auto* txt = ui_doc->GetElementById("code-status-text")) {
-            txt->SetInnerRML(EscapeXml(label_override.empty() ? (synced ? Tr("Synced", "Sincronizado") : Tr("Pending syntax...", "Sintaxe pendente...")) : label_override));
+            SetElementTextFast(txt, label_override.empty() ? (synced ? Tr("Synced", "Sincronizado") : Tr("Pending syntax...", "Sintaxe pendente...")) : label_override);
         }
     }
 
@@ -5592,11 +5622,15 @@ struct StudioUI::Impl {
         if (const auto* p = doc->FindNode(n->parent_id)) { pw = p->width; ph = p->height; }
 
         if (input_id == "prop-x") {
-            n->x = FromDisplayUnit(ToDisplayUnit(n->x, pw) + step, pw);
-            n->modified_transform = true;
+            if (!IsNodeFlowManaged(*n)) {
+                n->x = FromDisplayUnit(ToDisplayUnit(n->x, pw) + step, pw);
+                n->modified_transform = true;
+            }
         } else if (input_id == "prop-y") {
-            n->y = FromDisplayUnit(ToDisplayUnit(n->y, ph) + step, ph);
-            n->modified_transform = true;
+            if (!IsNodeFlowManaged(*n)) {
+                n->y = FromDisplayUnit(ToDisplayUnit(n->y, ph) + step, ph);
+                n->modified_transform = true;
+            }
         } else if (input_id == "prop-w") {
             float old_w = n->width, old_h = n->height;
             n->width = std::max(8.0f, FromDisplayUnit(ToDisplayUnit(n->width, pw) + step, pw));
@@ -5694,7 +5728,10 @@ struct StudioUI::Impl {
 
             UpdateCodeStatusIndicator(ok, ok ? Tr("Synced", "Sincronizado") : (err.empty() ? Tr("Pending syntax...", "Sintaxe pendente...") : err));
             SyncCodeGutter(true);
+            diag_dirty = true;
             if (ok) {
+                live_code_override_tab.clear();
+                live_code_override_src.clear();
                 if (code_tab == "RML") {
                     int next_sel = doc->root_id;
                     bool matched = false;
@@ -5717,6 +5754,12 @@ struct StudioUI::Impl {
                 suppress_code_sync = true;
                 SyncUIFromDoc(true);
                 suppress_code_sync = false;
+                if (engine) engine->SyncAndRenderCanvas(*doc, true);
+                RefreshDiagnostics(true);
+            } else {
+                live_code_override_tab = code_tab;
+                live_code_override_src = code;
+                RefreshDiagnostics(true);
             }
             return;
         }
@@ -5740,15 +5783,51 @@ struct StudioUI::Impl {
         };
 
         if (field == "id") {
-            if (n->rml_id != raw) { push_once(); n->rml_id = raw; n->modified_style = true; }
+            if (n->rml_id != raw) {
+                push_once();
+                n->rml_id = raw;
+                if (n->from_import && !n->is_body_root) n->name = n->DefaultDisplayName(22);
+            }
         } else if (field == "class") {
-            if (n->rml_class != raw) { push_once(); n->rml_class = raw; n->modified_style = true; }
+            if (n->rml_class != raw) {
+                push_once();
+                n->rml_class = raw;
+                if (n->from_import && !n->is_body_root) n->name = n->DefaultDisplayName(22);
+            }
         } else if (field == "x") {
             float v = 0.0f;
-            if (TryParseFloatStrict(raw, v)) { push_once(); n->x = FromDisplayUnit(v, pw); n->modified_transform = true; }
+            if (TryParseFloatStrict(raw, v)) {
+                float target_x = std::round(FromDisplayUnit(v, pw));
+                push_once();
+                if (n->pos_mode == RmlPositionMode::Absolute) {
+                    n->x = target_x;
+                } else if (n->pos_mode == RmlPositionMode::Relative) {
+                    n->rel_x += std::round(target_x - n->x);
+                    n->x = target_x;
+                } else {
+                    n->margin_left += std::round(target_x - n->x);
+                    n->has_margin_left = true;
+                    n->x = target_x;
+                }
+                n->modified_transform = true;
+            }
         } else if (field == "y") {
             float v = 0.0f;
-            if (TryParseFloatStrict(raw, v)) { push_once(); n->y = FromDisplayUnit(v, ph); n->modified_transform = true; }
+            if (TryParseFloatStrict(raw, v)) {
+                float target_y = std::round(FromDisplayUnit(v, ph));
+                push_once();
+                if (n->pos_mode == RmlPositionMode::Absolute) {
+                    n->y = target_y;
+                } else if (n->pos_mode == RmlPositionMode::Relative) {
+                    n->rel_y += std::round(target_y - n->y);
+                    n->y = target_y;
+                } else {
+                    n->margin_top += std::round(target_y - n->y);
+                    n->has_margin_top = true;
+                    n->y = target_y;
+                }
+                n->modified_transform = true;
+            }
         } else if (field == "w") {
             float v = 0.0f;
             if (TryParseFloatStrict(raw, v)) {
@@ -5757,6 +5836,8 @@ struct StudioUI::Impl {
                     push_once();
                     float old_w = n->width, old_h = n->height;
                     n->width = std::max(8.0f, px);
+                    n->size_mode_w = 0;
+                    if (n->anchor_h == 2) n->anchor_h = 0;
                     n->modified_transform = true;
                     if (n->id == doc->root_id) doc->screen_width = (int)std::round(n->width);
                     doc->ApplyConstraintsOnParentResize(n->id, old_w, old_h, n->width, n->height);
@@ -5770,6 +5851,8 @@ struct StudioUI::Impl {
                     push_once();
                     float old_w = n->width, old_h = n->height;
                     n->height = std::max(8.0f, px);
+                    n->size_mode_h = 0;
+                    if (n->anchor_v == 2) n->anchor_v = 0;
                     n->modified_transform = true;
                     if (n->id == doc->root_id) doc->screen_height = (int)std::round(n->height);
                     doc->ApplyConstraintsOnParentResize(n->id, old_w, old_h, n->width, n->height);
@@ -5814,7 +5897,21 @@ struct StudioUI::Impl {
             int v = 0;
             if (TryParseIntStrict(raw, v)) { push_once(); n->border_color.a = (uint8_t)std::clamp(v, 0, 255); n->modified_style = true; }
         } else if (field == "text") {
-            if (n->text != raw) { push_once(); n->text = raw; }
+            if (n->text != raw) {
+                push_once();
+                n->text = raw;
+                if (n->from_import && !n->is_body_root) n->name = n->DefaultDisplayName(22);
+                const std::string& t = n->tag;
+                bool is_text_tag = (t == "span" || t == "label" || t == "p" ||
+                                    t == "h1" || t == "h2" || t == "h3" || t == "h4" || t == "h5" || t == "h6" ||
+                                    t == "a" || t == "b" || t == "i" || t == "strong" || t == "em" || t == "small");
+                if (n->children.empty() && is_text_tag) {
+                    n->size_mode_w = 1;
+                    n->size_mode_h = 1;
+                    if (n->anchor_h == 2) n->anchor_h = 0;
+                    if (n->anchor_v == 2) n->anchor_v = 0;
+                }
+            }
         } else if (field == "font-size") {
             float v = 0.0f;
             if (TryParseFloatStrict(raw, v) && ((v >= 6.0f && v <= 160.0f) || commit)) {
@@ -5879,16 +5976,7 @@ struct StudioUI::Impl {
 
     std::string ComputeNodeLabel(const RmlNode& n) const {
         if (!n.name.empty()) return n.name;
-        if (!n.rml_id.empty()) return "#" + n.rml_id;
-        if (!n.text.empty()) {
-            return n.text.size() > 24 ? (n.text.substr(0, 24) + "...") : n.text;
-        }
-        if (!n.rml_class.empty()) {
-            std::istringstream ss(n.rml_class);
-            std::string first_c;
-            if (ss >> first_c) return "." + first_c;
-        }
-        return n.tag;
+        return n.DefaultDisplayName(24);
     }
 
     bool NodeOrSubtreeMatchesFilter(int id) const {
@@ -5903,21 +5991,113 @@ struct StudioUI::Impl {
         return false;
     }
 
+    void ExpandAncestorsOf(int node_id) {
+        if (!doc || node_id <= 0) return;
+        int cur = node_id;
+        for (int guard = 0; guard < 128; ++guard) {
+            auto* n = doc->FindNode(cur);
+            if (!n || n->parent_id <= 0) break;
+            auto* parent = doc->FindNode(n->parent_id);
+            if (!parent) break;
+            parent->collapsed = false;
+            cur = parent->id;
+        }
+    }
+
+    void ApplySmartLayerCollapse(int selected_id) {
+        if (!doc || doc->nodes.size() <= 40) return;
+        auto walk = [&](auto& self_fn, int id, int depth) -> void {
+            auto* n = doc->FindNode(id);
+            if (!n) return;
+            if (!n->children.empty() && n->id != doc->root_id) {
+                const bool deep_or_crowded = (depth >= 2) || (n->children.size() > 6) || !n->visible;
+                n->collapsed = deep_or_crowded;
+            } else if (n->id == doc->root_id) {
+                n->collapsed = false;
+            }
+            for (int cid : n->children) {
+                self_fn(self_fn, cid, depth + 1);
+            }
+        };
+        walk(walk, doc->root_id, 0);
+        ExpandAncestorsOf(selected_id);
+    }
+
     void RebuildLayers() {
         if (!ui_doc || !doc) return;
         auto* list = ui_doc->GetElementById("layers-list");
         if (!list) return;
 
+        if (search_filter.empty() && doc->nodes.size() > 40) {
+            ExpandAncestorsOf(PrimaryId());
+        }
+
         if (auto* cnt = ui_doc->GetElementById("layers-count")) {
-            cnt->SetInnerRML(std::to_string(doc->nodes.size()));
+            SetElementTextFast(cnt, std::to_string(doc->nodes.size()));
+        }
+
+        layer_rows.clear();
+        auto collect_node = [&](auto& self_fn, int id, int depth) -> void {
+            const RmlNode* n = doc->FindNode(id);
+            if (!n) return;
+            if (!NodeOrSubtreeMatchesFilter(id)) return;
+            layer_rows.push_back({n->id, depth});
+            if (!n->collapsed || !search_filter.empty()) {
+                for (int cid : n->children) self_fn(self_fn, cid, depth + 1);
+            }
+        };
+        collect_node(collect_node, doc->root_id, 0);
+
+        last_layers_first_row = -1;
+        last_layers_last_row = -1;
+        SyncVisibleLayers(true);
+        ApplyPanelSizes(win_w, win_h);
+    }
+
+    void SyncVisibleLayers(bool force) {
+        if (!ui_doc || !doc) return;
+        auto* list = ui_doc->GetElementById("layers-list");
+        if (!list || list->IsClassSet("hidden")) return;
+
+        constexpr int kRowStride = 29;
+        constexpr int kOverscan = 4;
+        const int total = static_cast<int>(layer_rows.size());
+        const float ch = (list->GetClientHeight() > 16.0f) ? list->GetClientHeight() : 520.0f;
+        const float max_st = std::max(0.0f, static_cast<float>(total * kRowStride) - ch);
+        const float st = std::min(std::max(0.0f, list->GetScrollTop()), max_st);
+
+        if (!force && std::fabs(st - last_layers_scroll_top) < 1.0f && last_layers_first_row >= 0) {
+            return;
+        }
+
+        const int vis_first = (total > 0) ? std::max(0, static_cast<int>(std::floor(st / static_cast<float>(kRowStride)))) : 0;
+        const int vis_last = (total > 0) ? std::min(total - 1, static_cast<int>(std::ceil((st + ch) / static_cast<float>(kRowStride)))) : -1;
+
+        if (!force &&
+            last_layers_first_row >= 0 &&
+            vis_first >= last_layers_first_row &&
+            vis_last <= last_layers_last_row) {
+            last_layers_scroll_top = st;
+            return;
+        }
+
+        const int render_first = (total > 0) ? std::max(0, vis_first - kOverscan) : 0;
+        const int render_last = (total > 0) ? std::min(total - 1, vis_last + kOverscan) : -1;
+
+        if (!force && render_first == last_layers_first_row && render_last == last_layers_last_row) {
+            last_layers_scroll_top = st;
+            return;
         }
 
         std::vector<int> rendered_ids;
         std::ostringstream html;
-        auto append_node = [&](auto& self_fn, int id, int depth) -> void {
-            const RmlNode* n = doc->FindNode(id);
-            if (!n) return;
-            if (!NodeOrSubtreeMatchesFilter(id)) return;
+        if (render_first > 0) {
+            html << "<div style=\"width:100%;height:" << (render_first * kRowStride) << "px;\"></div>";
+        }
+        for (int idx = render_first; idx <= render_last; ++idx) {
+            const auto& entry = layer_rows[static_cast<size_t>(idx)];
+            const RmlNode* n = doc->FindNode(entry.node_id);
+            if (!n) continue;
 
             const char* ico_src = "studio_ico_box";
             if (n->id == doc->root_id || n->tag == "body") ico_src = "studio_ico_braces";
@@ -5928,7 +6108,7 @@ struct StudioUI::Impl {
             else if (n->tag == "progress" || n->tag == "progressbar") ico_src = "studio_ico_bar";
 
             std::string label = ComputeNodeLabel(*n);
-            int pad = depth * 14 + 7;
+            int pad = entry.depth * 14 + 7;
             rendered_ids.push_back(n->id);
 
             html << "<div id=\"lr-" << n->id << "\" class=\"layer-row"
@@ -5946,13 +6126,18 @@ struct StudioUI::Impl {
                  << "<button id=\"lv-" << n->id << "\" class=\"tree-vis-btn" << (n->visible ? "" : " off") << "\" title=\"Alternar visibilidade\">"
                  << "<img class=\"ico ico-13\" src=\"" << (n->visible ? "studio_ico_eye" : "studio_ico_eye_off") << "\" /></button>"
                  << "</div>";
-
-            if (!n->collapsed || !search_filter.empty()) {
-                for (int cid : n->children) self_fn(self_fn, cid, depth + 1);
+        }
+        if (render_last >= 0 && render_last + 1 < total) {
+            const int bot_h = (total - 1 - render_last) * kRowStride;
+            if (bot_h > 0) {
+                html << "<div style=\"width:100%;height:" << bot_h << "px;\"></div>";
             }
-        };
-        append_node(append_node, doc->root_id, 0);
+        }
+
         list->SetInnerRML(html.str());
+        if (force && st > 0.5f) {
+            list->SetScrollTop(st);
+        }
         layer_listeners.clear();
 
         auto bind = [&](const std::string& eid, const std::string& act, int nid) {
@@ -5972,7 +6157,9 @@ struct StudioUI::Impl {
                 bind("lc-" + std::to_string(nid), "toggle_collapse", nid);
             }
         }
-        ApplyPanelSizes(win_w, win_h);
+        last_layers_first_row = render_first;
+        last_layers_last_row = render_last;
+        last_layers_scroll_top = list->GetScrollTop();
     }
 
     static size_t Utf8CharToByteOffset(const std::string& s, int char_idx) {
@@ -5989,66 +6176,42 @@ struct StudioUI::Impl {
     }
 
     void SyncCodeGutter(bool force_rebuild) {
-        if (!ui_doc) return;
+        if (!ui_doc || !show_bottom_dock) return;
         auto* ta = dynamic_cast<Rml::ElementFormControlTextArea*>(ui_doc->GetElementById("code-editor"));
         auto* inner = ui_doc->GetElementById("code-gutter-inner");
         auto* hl = ui_doc->GetElementById("code-highlight");
         auto* act_line = ui_doc->GetElementById("code-active-line");
         if (!ta || !inner) return;
 
-        float st = ta->GetScrollTop();
-        float sl = ta->GetScrollLeft();
-        if (force_rebuild || std::fabs(st - last_code_scroll_top) > 0.25f || std::fabs(sl - last_code_scroll_left) > 0.25f) {
-            last_code_scroll_top = st;
-            last_code_scroll_left = sl;
-            char m_buf[32];
-            std::snprintf(m_buf, sizeof(m_buf), "%.1fpx", -st);
-            inner->SetProperty("margin-top", m_buf);
-            if (hl) {
-                hl->SetProperty("margin-top", m_buf);
-                std::snprintf(m_buf, sizeof(m_buf), "%.1fpx", -sl);
-                hl->SetProperty("margin-left", m_buf);
-            }
-            if (act_line && last_gutter_cur_line >= 1) {
-                float top_y = 8.0f + (float)(last_gutter_cur_line - 1) * 16.0f - st;
-                std::snprintf(m_buf, sizeof(m_buf), "%.1fpx", top_y);
-                act_line->SetProperty("top", m_buf);
-            }
-        }
-
-        std::string val = ta->GetValue();
-        if (hl && (force_rebuild || val != last_highlighted_code || code_tab != last_highlighted_tab)) {
-            last_highlighted_code = val;
-            last_highlighted_tab = code_tab;
-            std::string hl_src = val;
-            constexpr size_t kMaxHlBytes = 48000u;
-            if (hl_src.size() > kMaxHlBytes) {
-                hl_src.resize(kMaxHlBytes);
-            }
-            hl->SetInnerRML((code_tab == "RCSS") ? BuildHighlightedRcss(hl_src) : BuildHighlightedRml(hl_src));
-        }
-
+        const float st = ta->GetScrollTop();
+        const float sl = ta->GetScrollLeft();
         int sel_s = 0, sel_e = 0;
         ta->GetSelection(&sel_s, &sel_e, nullptr);
-        if (!force_rebuild && sel_s == last_cursor_sel_start) {
+        const std::string val = ta->GetValue();
+
+        const bool scroll_changed = (std::fabs(st - last_code_scroll_top) > 0.25f || std::fabs(sl - last_code_scroll_left) > 0.25f);
+        const bool code_changed = (val != last_highlighted_code || code_tab != last_highlighted_tab);
+        const bool cursor_changed = (sel_s != last_cursor_sel_start);
+        if (!force_rebuild && !scroll_changed && !code_changed && !cursor_changed) {
             return;
         }
-        last_cursor_sel_start = sel_s;
 
-        size_t cursor_byte = Utf8CharToByteOffset(val, sel_s);
-
-        int total_lines = 1;
+        const size_t cursor_byte = Utf8CharToByteOffset(val, sel_s);
+        std::vector<size_t> line_starts;
+        line_starts.reserve(64);
+        line_starts.push_back(0);
         int cur_line = 1;
         size_t line_start_byte = 0;
         for (size_t i = 0; i < val.size(); ++i) {
             if (val[i] == '\n') {
-                ++total_lines;
+                line_starts.push_back(i + 1);
                 if (i < cursor_byte) {
                     ++cur_line;
                     line_start_byte = i + 1;
                 }
             }
         }
+        const int total_lines = static_cast<int>(line_starts.size());
         int cur_col = 1;
         for (size_t i = line_start_byte; i < cursor_byte && i < val.size();) {
             unsigned char c = static_cast<unsigned char>(val[i]);
@@ -6057,25 +6220,71 @@ struct StudioUI::Impl {
             ++cur_col;
         }
 
-        constexpr int kMaxGutterLines = 1500;
-        int shown_lines = std::clamp(total_lines, 1, kMaxGutterLines);
+        const float view_h = std::max(160.0f, ta->GetBox().GetSize().y);
+        const int vis_count = std::max(14, static_cast<int>(std::ceil(view_h / 16.0f)) + 6);
+        const int first_line = std::clamp(static_cast<int>(std::floor(st / 16.0f)) - 2, 1, total_lines);
+        const int last_line = std::min(total_lines, first_line + vis_count);
 
-        if (shown_lines != last_gutter_lines) {
+        const float offset_y = static_cast<float>(first_line - 1) * 16.0f - st;
+        if (force_rebuild || scroll_changed || first_line != last_hl_first_line) {
+            last_code_scroll_top = st;
+            last_code_scroll_left = sl;
+            char m_buf[32];
+            std::snprintf(m_buf, sizeof(m_buf), "%.1fpx", offset_y);
+            inner->SetProperty("margin-top", m_buf);
+            if (hl) {
+                hl->SetProperty("margin-top", m_buf);
+                std::snprintf(m_buf, sizeof(m_buf), "%.1fpx", -sl);
+                hl->SetProperty("margin-left", m_buf);
+            }
+        }
+        if (act_line && (force_rebuild || scroll_changed || cur_line != last_gutter_cur_line)) {
+            char m_buf[32];
+            const float top_y = 8.0f + static_cast<float>(cur_line - 1) * 16.0f - st;
+            std::snprintf(m_buf, sizeof(m_buf), "%.1fpx", top_y);
+            act_line->SetProperty("top", m_buf);
+        }
+
+        if (hl && (force_rebuild || code_changed || first_line != last_hl_first_line || last_line != last_hl_last_line)) {
+            last_highlighted_code = val;
+            last_highlighted_tab = code_tab;
+            last_hl_first_line = first_line;
+            last_hl_last_line = last_line;
+
+            const size_t slice_start = line_starts[static_cast<size_t>(first_line - 1)];
+            size_t slice_end = val.size();
+            if (last_line < total_lines) {
+                slice_end = line_starts[static_cast<size_t>(last_line)];
+                if (slice_end > slice_start && val[slice_end - 1] == '\n') {
+                    --slice_end;
+                }
+            }
+            constexpr size_t kMaxWindowBytes = 16000u;
+            if (slice_end - slice_start > kMaxWindowBytes) {
+                slice_end = slice_start + kMaxWindowBytes;
+            }
+            const std::string hl_slice = val.substr(slice_start, slice_end - slice_start);
+            hl->SetInnerRML((code_tab == "RCSS") ? BuildHighlightedRcss(hl_slice) : BuildHighlightedRml(hl_slice));
+        }
+
+        if (force_rebuild || total_lines != last_gutter_lines || first_line != last_gutter_first_line || last_line != last_gutter_last_line) {
             std::ostringstream gss;
-            for (int l = 1; l <= shown_lines; ++l) {
+            for (int l = first_line; l <= last_line; ++l) {
                 gss << "<div id=\"cl-" << l << "\" class=\"code-lnum" << (l == cur_line ? " cur" : "")
                     << "\">" << l << "</div>";
             }
             inner->SetInnerRML(gss.str());
-            last_gutter_lines = shown_lines;
+            last_gutter_lines = total_lines;
+            last_gutter_first_line = first_line;
+            last_gutter_last_line = last_line;
             last_gutter_cur_line = cur_line;
         } else if (cur_line != last_gutter_cur_line) {
-            if (last_gutter_cur_line >= 1) {
+            if (last_gutter_cur_line >= first_line && last_gutter_cur_line <= last_line) {
                 if (auto* prev_el = ui_doc->GetElementById("cl-" + std::to_string(last_gutter_cur_line))) {
                     prev_el->SetClass("cur", false);
                 }
             }
-            if (cur_line >= 1) {
+            if (cur_line >= first_line && cur_line <= last_line) {
                 if (auto* cur_el = ui_doc->GetElementById("cl-" + std::to_string(cur_line))) {
                     cur_el->SetClass("cur", true);
                 }
@@ -6083,35 +6292,216 @@ struct StudioUI::Impl {
             last_gutter_cur_line = cur_line;
         }
 
-        if (act_line) {
-            char m_buf[32];
-            float top_y = 8.0f + (float)(cur_line - 1) * 16.0f - st;
-            std::snprintf(m_buf, sizeof(m_buf), "%.1fpx", top_y);
-            act_line->SetProperty("top", m_buf);
+        if (force_rebuild || cursor_changed || code_changed) {
+            last_cursor_sel_start = sel_s;
+            if (auto* lbl = ui_doc->GetElementById("code-cursor-lbl")) {
+                char cbuf[64];
+                std::snprintf(cbuf, sizeof(cbuf), "Ln %d, Col %d \xC2\xB7 %d linha%s",
+                              cur_line, cur_col, total_lines, total_lines == 1 ? "" : "s");
+                SetElementTextFast(lbl, cbuf);
+            }
+        }
+    }
+
+    void SwitchCodeTab(const std::string& next_tab) {
+        if (!ui_doc) return;
+        code_tab = next_tab;
+        last_code_undo_ms = 0;
+        if (auto* t1 = ui_doc->GetElementById("tab-code-rml")) t1->SetClass("current", code_tab == "RML");
+        if (auto* t2 = ui_doc->GetElementById("tab-code-rcss")) t2->SetClass("current", code_tab == "RCSS");
+        if (auto* t3 = ui_doc->GetElementById("tab-code-problems")) t3->SetClass("current", code_tab == "PROBLEMS");
+
+        bool show_problems = (code_tab == "PROBLEMS");
+        if (auto* cc = ui_doc->GetElementById("code-content")) cc->SetClass("hidden", show_problems);
+        if (auto* pp = ui_doc->GetElementById("problems-panel")) pp->SetClass("hidden", !show_problems);
+        if (auto* cl = ui_doc->GetElementById("code-cursor-lbl")) cl->SetClass("hidden", show_problems);
+        if (auto* cb = ui_doc->GetElementById("btn-copy-code")) cb->SetClass("hidden", show_problems);
+
+        if (!show_problems) {
+            SyncCodeDock();
+        } else {
+            RefreshDiagnostics(true);
+        }
+    }
+
+    void JumpToCodeLine(int target_line) {
+        if (!ui_doc) return;
+        auto* ta = dynamic_cast<Rml::ElementFormControlTextArea*>(ui_doc->GetElementById("code-editor"));
+        if (!ta) return;
+
+        std::string val = ta->GetValue();
+        int clamped_line = std::max(1, target_line);
+        size_t byte_pos = 0;
+        int cur_line = 1;
+        while (byte_pos < val.size() && cur_line < clamped_line) {
+            if (val[byte_pos] == '\n') ++cur_line;
+            ++byte_pos;
+        }
+        int char_idx = 0;
+        for (size_t k = 0; k < byte_pos && k < val.size();) {
+            unsigned char c = static_cast<unsigned char>(val[k]);
+            size_t step = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0) ? 2 : ((c & 0xF0) == 0xE0) ? 3 : 4;
+            k = std::min(byte_pos, k + step);
+            ++char_idx;
         }
 
-        if (auto* lbl = ui_doc->GetElementById("code-cursor-lbl")) {
-            char cbuf[64];
-            std::snprintf(cbuf, sizeof(cbuf), "Ln %d, Col %d &#183; %d linha%s",
-                          cur_line, cur_col, total_lines, total_lines == 1 ? "" : "s");
-            lbl->SetInnerRML(cbuf);
+        ta->Focus();
+        ta->SetSelectionRange(char_idx, char_idx);
+        ta->SetScrollTop(std::max(0.0f, static_cast<float>(clamped_line - 3) * 16.0f));
+        last_cursor_sel_start = -1;
+        SyncCodeGutter(true);
+    }
+
+    void JumpToProblem(int index) {
+        if (index < 0 || index >= static_cast<int>(diagnostics.size())) return;
+        const DiagnosticItem& item = diagnostics[static_cast<size_t>(index)];
+        std::string target_tab = (item.source == DiagnosticItem::SourceFile::Rcss) ? "RCSS" : "RML";
+        int target_line = std::max(1, item.line);
+        SwitchCodeTab(target_tab);
+        if (ui_doc) ui_doc->UpdateDocument();
+        JumpToCodeLine(target_line);
+    }
+
+    void RefreshDiagnostics(bool force = false) {
+        if (!ui_doc || !doc) return;
+        uint64_t log_seq = engine ? engine->LastCanvasLogSeq() : 0;
+        if (!force && !diag_dirty && last_diag_rev == doc->revision && last_diag_log_seq == log_seq) {
+            return;
+        }
+        diag_dirty = false;
+        last_diag_rev = doc->revision;
+        last_diag_log_seq = log_seq;
+
+        std::string ov_rml = (live_code_override_tab == "RML") ? live_code_override_src : "";
+        std::string ov_rcss = (live_code_override_tab == "RCSS") ? live_code_override_src : "";
+        diagnostics = RmlDiagnosticsEngine::Analyze(*doc, engine, ov_rml, ov_rcss);
+
+        size_t err_cnt = 0;
+        size_t warn_cnt = 0;
+        size_t unused_cnt = 0;
+        for (const auto& d : diagnostics) {
+            if (d.severity == DiagnosticItem::Severity::Error) ++err_cnt;
+            else if (d.severity == DiagnosticItem::Severity::Warning) ++warn_cnt;
+            else ++unused_cnt;
+        }
+        size_t total_cnt = diagnostics.size();
+
+        if (auto* badge = ui_doc->GetElementById("problems-count-badge")) {
+            badge->SetInnerRML(std::to_string(total_cnt));
+            badge->SetClass("zero", total_cnt == 0);
+            badge->SetClass("has-err", err_cnt > 0);
+            badge->SetClass("has-warn", err_cnt == 0 && warn_cnt > 0);
+            badge->SetClass("has-unused", err_cnt == 0 && warn_cnt == 0 && unused_cnt > 0);
+        }
+
+        if (auto* summary = ui_doc->GetElementById("problems-summary")) {
+            if (total_cnt == 0) {
+                summary->SetInnerRML(Tr("No issues detected", "Nenhum problema detectado"));
+            } else {
+                std::ostringstream ss;
+                ss << total_cnt << " " << Tr(total_cnt == 1 ? "issue" : "issues", total_cnt == 1 ? "problema" : "problemas")
+                   << " (";
+                bool first = true;
+                auto add_part = [&](size_t c, const char* en, const char* pt) {
+                    if (c == 0) return;
+                    if (!first) ss << ", ";
+                    ss << c << " " << Tr(en, pt);
+                    first = false;
+                };
+                add_part(err_cnt, err_cnt == 1 ? "error" : "errors", err_cnt == 1 ? "erro" : "erros");
+                add_part(warn_cnt, warn_cnt == 1 ? "warning" : "warnings", warn_cnt == 1 ? "aviso" : "avisos");
+                add_part(unused_cnt, "unused", "sobrando");
+                ss << ")";
+                summary->SetInnerRML(ss.str());
+            }
+        }
+
+        if (auto* clean_btn = ui_doc->GetElementById("btn-clean-rcss")) {
+            clean_btn->SetClass("disabled", unused_cnt == 0);
+            std::string btn_label = (unused_cnt > 0)
+                ? (std::string(Tr("Clean Unused RCSS", "Limpar RCSS Sobrando")) + " (" + std::to_string(unused_cnt) + ")")
+                : std::string(Tr("Clean Unused RCSS", "Limpar RCSS Sobrando"));
+            for (int i = 0; i < clean_btn->GetNumChildren(); ++i) {
+                if (auto* ch = clean_btn->GetChild(i)) {
+                    if (ch->GetTagName() == "span") {
+                        ch->SetInnerRML(EscapeXml(btn_label));
+                        break;
+                    }
+                }
+            }
+        }
+
+        auto* list = ui_doc->GetElementById("problems-list");
+        if (!list) return;
+
+        // Destroy child DOM elements BEFORE freeing EventListeners so ~EventDispatcher() never sees dangling pointers
+        if (diagnostics.empty()) {
+            list->SetInnerRML(std::string("<div class=\"prob-empty\">") +
+                              Tr("No syntax errors, unsupported CSS properties, or unused rules detected.",
+                                 "Nenhum erro de sintaxe, propriedade CSS n&#227;o suportada ou regra sobrando detectada.") +
+                              "</div>");
+            problem_listeners.clear();
+            return;
+        }
+
+        std::ostringstream html;
+        for (size_t i = 0; i < diagnostics.size(); ++i) {
+            const auto& d = diagnostics[i];
+            const char* sev_cls = (d.severity == DiagnosticItem::Severity::Error)
+                ? "sev-err"
+                : ((d.severity == DiagnosticItem::Severity::Warning) ? "sev-warn" : "sev-unused");
+            const char* sev_lbl = (d.severity == DiagnosticItem::Severity::Error)
+                ? Tr("ERROR", "ERRO")
+                : ((d.severity == DiagnosticItem::Severity::Warning) ? Tr("WARN", "AVISO") : Tr("UNUSED", "SOBRANDO"));
+            std::string fname = (d.source == DiagnosticItem::SourceFile::Rcss) ? "style.rcss" : "layout.rml";
+            std::string loc = fname + ":" + std::to_string(std::max(1, d.line));
+
+            html << "<button id=\"prob-item-" << i << "\" class=\"prob-row\" title=\""
+                 << EscapeXml(d.code) << "\">"
+                 << "<span class=\"prob-badge " << sev_cls << "\">" << sev_lbl << "</span>"
+                 << "<span class=\"prob-loc\">" << EscapeXml(loc) << "</span>"
+                 << "<span class=\"prob-msg\">" << EscapeXml(d.message) << "</span>"
+                 << "</button>";
+        }
+        list->SetInnerRML(html.str());
+        problem_listeners.clear();
+
+        for (size_t i = 0; i < diagnostics.size(); ++i) {
+            std::string row_id = "prob-item-" + std::to_string(i);
+            if (auto* el = ui_doc->GetElementById(row_id.c_str())) {
+                auto h = std::make_unique<ClickHandler>();
+                h->self = this;
+                h->action = "jump_problem";
+                h->node_id = static_cast<int>(i);
+                el->AddEventListener(Rml::EventId::Click, h.get());
+                problem_listeners.push_back(std::move(h));
+            }
         }
     }
 
     void SyncCodeDock() {
         if (!ui_doc || !doc) return;
+        if (!show_bottom_dock) {
+            code_dock_dirty_while_hidden = true;
+            return;
+        }
+        code_dock_dirty_while_hidden = false;
         last_synced_code_tab = code_tab;
+        if (code_tab == "PROBLEMS") return;
         if (suppress_code_sync) return;
 
         std::string rml, rcss;
         std::vector<RmlAsset> assets;
         doc->GenerateRmlAndRcss(rml, rcss, assets);
-        const std::string& src = (code_tab == "RCSS") ? rcss : rml;
+        std::string src = (code_tab == "RCSS") ? rcss : rml;
+        if (live_code_override_tab == code_tab && !live_code_override_src.empty()) {
+            src = live_code_override_src;
+        }
 
         bool prev_sync = syncing_ui;
         syncing_ui = true;
         SetInputValue("code-editor", src);
-        UpdateCodeStatusIndicator(true);
+        UpdateCodeStatusIndicator(live_code_override_tab != code_tab);
         SyncCodeGutter(true);
         syncing_ui = prev_sync;
     }
@@ -6119,18 +6509,15 @@ struct StudioUI::Impl {
     void SyncUIFromDoc(bool force = false) {
         if (!ui_doc || !doc) return;
         int cur_primary = PrimaryId();
-        if (!force && last_synced_rev == doc->revision && last_synced_sel == cur_primary && last_synced_sel_count == selected_ids.size()) return;
+        if (!force && last_synced_rev == doc->revision && last_synced_sel == cur_primary && last_synced_sel_count == gizmo.selected_ids.size()) return;
 
-        selected_ids.erase(
-            std::remove_if(selected_ids.begin(), selected_ids.end(), [&](int sid) { return !doc->FindNode(sid); }),
-            selected_ids.end()
-        );
-        if (selected_ids.empty()) SetSingleSelection(doc->root_id);
+        gizmo.PruneMissingSelection(*doc);
         cur_primary = PrimaryId();
+        diag_dirty = true;
 
         last_synced_rev = doc->revision;
         last_synced_sel = cur_primary;
-        last_synced_sel_count = selected_ids.size();
+        last_synced_sel_count = gizmo.selected_ids.size();
         syncing_ui = true;
 
         UpdateHeaderButtonsUI();
@@ -6140,17 +6527,17 @@ struct StudioUI::Impl {
         if (const auto* n = doc->FindNode(cur_primary)) {
             if (auto* pill = ui_doc->GetElementById("insp-node-pill")) {
                 std::string ptxt = ComputeNodeLabel(*n);
-                if (selected_ids.size() > 1) ptxt += " (+" + std::to_string(selected_ids.size() - 1) + ")";
+                if (gizmo.selected_ids.size() > 1) ptxt += " (+" + std::to_string(gizmo.selected_ids.size() - 1) + ")";
                 pill->SetInnerRML(EscapeXml(ptxt));
             }
             if (auto* sub = ui_doc->GetElementById("insp-node-sub")) {
-                std::string stxt = (selected_ids.size() > 1)
-                    ? (std::to_string(selected_ids.size()) + " " + Tr("elements selected", "elementos selecionados"))
+                std::string stxt = (gizmo.selected_ids.size() > 1)
+                    ? (std::to_string(gizmo.selected_ids.size()) + " " + Tr("elements selected", "elementos selecionados"))
                     : ("&lt;" + EscapeXml(n->tag) + "&gt; " + Tr("selected", "selecionado"));
                 sub->SetInnerRML(stxt);
             }
 
-            SetInputValue("prop-id", n->rml_id.empty() ? n->name : n->rml_id);
+            SetInputValue("prop-id", n->rml_id);
             SetInputValue("prop-class", n->rml_class);
             if (auto* vis = ui_doc->GetElementById("prop-visible")) vis->SetClass("on", n->visible);
             if (auto* b = ui_doc->GetElementById("lbl-lock")) b->SetInnerRML(n->locked ? Tr("Unlock", "Destravar") : Tr("Lock", "Bloquear"));
@@ -6158,10 +6545,21 @@ struct StudioUI::Impl {
             float pw = (float)doc->screen_width;
             float ph = (float)doc->screen_height;
             if (const auto* p = doc->FindNode(n->parent_id)) { pw = p->width; ph = p->height; }
+            float disp_w = n->width;
+            float disp_h = n->height;
+            float rwx = 0.0f, rwy = 0.0f, rww = 0.0f, rwh = 0.0f;
+            if (engine && engine->GetCanvasElementRect(n->id, rwx, rwy, rww, rwh)) {
+                if (n->size_mode_w != 0 || (n->from_import && !n->modified_transform)) disp_w = std::max(1.0f, std::round(rww));
+                if (n->size_mode_h != 0 || (n->from_import && !n->modified_transform)) disp_h = std::max(1.0f, std::round(rwh));
+            }
             SetInputValue("prop-x", FormatFloat(ToDisplayUnit(n->x, pw)));
             SetInputValue("prop-y", FormatFloat(ToDisplayUnit(n->y, ph)));
-            SetInputValue("prop-w", FormatFloat(ToDisplayUnit(n->width, pw)));
-            SetInputValue("prop-h", FormatFloat(ToDisplayUnit(n->height, ph)));
+            SetInputValue("prop-w", FormatFloat(ToDisplayUnit(disp_w, pw)));
+            SetInputValue("prop-h", FormatFloat(ToDisplayUnit(disp_h, ph)));
+
+            if (auto* e = ui_doc->GetElementById("pos-static")) e->SetClass("active", n->pos_mode == RmlPositionMode::Static);
+            if (auto* e = ui_doc->GetElementById("pos-relative")) e->SetClass("active", n->pos_mode == RmlPositionMode::Relative);
+            if (auto* e = ui_doc->GetElementById("pos-absolute")) e->SetClass("active", n->pos_mode == RmlPositionMode::Absolute);
 
             if (auto* e = ui_doc->GetElementById("u-px")) e->SetClass("active", unit_mode == "px");
             if (auto* e = ui_doc->GetElementById("u-pct")) e->SetClass("active", unit_mode == "%");
@@ -6272,31 +6670,11 @@ struct StudioUI::Impl {
     }
 
     void ScreenToCanvas(int mx, int my, float& cx, float& cy) const {
-        cx = ((float)mx - pan_x) / std::max(0.01f, zoom);
-        cy = ((float)my - pan_y) / std::max(0.01f, zoom);
+        viewport.ScreenToCanvas(mx, my, cx, cy);
     }
 
     int HitTestHandle(int mx, int my, const RmlNode& n) const {
-        float wx = 0.0f, wy = 0.0f, ww = n.width, wh = n.height;
-        if (!engine || !engine->GetCanvasElementRect(n.id, wx, wy, ww, wh)) {
-            doc->GetWorldPos(n.id, wx, wy);
-            ww = n.width;
-            wh = n.height;
-        }
-        float x0 = pan_x + wx * zoom;
-        float y0 = pan_y + wy * zoom;
-        float x1 = x0 + ww * zoom;
-        float y1 = y0 + wh * zoom;
-        float xm = (x0 + x1) * 0.5f;
-        float ym = (y0 + y1) * 0.5f;
-        float pts[8][2] = {
-            {x0, y0}, {xm, y0}, {x1, y0}, {x1, ym},
-            {x1, y1}, {xm, y1}, {x0, y1}, {x0, ym}
-        };
-        for (int i = 0; i < 8; ++i) {
-            if (std::fabs((float)mx - pts[i][0]) <= 7.0f && std::fabs((float)my - pts[i][1]) <= 7.0f) return i;
-        }
-        return -1;
+        return gizmo.HitTestHandle(mx, my, n, doc, engine, viewport);
     }
 };
 
@@ -6355,6 +6733,8 @@ bool StudioUI::Init(GLFWwindow* window, RmlDocument& doc, RmlEngineHost& engine)
     // Code dock
     impl_->BindButton("tab-code-rml", "tab_rml");
     impl_->BindButton("tab-code-rcss", "tab_rcss");
+    impl_->BindButton("tab-code-problems", "tab_problems");
+    impl_->BindButton("btn-clean-rcss", "clean_unused_rcss");
     impl_->BindButton("btn-expand-code", "expand_code");
     impl_->BindButton("btn-copy-code", "copy_code");
     impl_->BindChange("code-editor", "code-editor");
@@ -6419,6 +6799,9 @@ bool StudioUI::Init(GLFWwindow* window, RmlDocument& doc, RmlEngineHost& engine)
     impl_->BindButton("gtype-col", "gtype_col");
     impl_->BindButton("gtype-row", "gtype_row");
     impl_->BindButton("gtype-grid", "gtype_grid");
+    impl_->BindButton("pos-static", "pos_static");
+    impl_->BindButton("pos-relative", "pos_relative");
+    impl_->BindButton("pos-absolute", "pos_absolute");
     impl_->BindButton("u-px", "u_px");
     impl_->BindButton("u-pct", "u_pct");
     impl_->BindButton("u-dp", "u_dp");
@@ -6483,6 +6866,7 @@ void StudioUI::Shutdown() {
     impl_->change_listeners.clear();
     impl_->layer_listeners.clear();
     impl_->popup_listeners.clear();
+    impl_->problem_listeners.clear();
     impl_->ui_doc = nullptr;
 }
 
@@ -6491,117 +6875,167 @@ void StudioUI::OnResize(int width, int height) {
     impl_->win_h = std::max(1, height);
     if (impl_->engine) impl_->engine->ResizeEditor(impl_->win_w, impl_->win_h);
     impl_->ApplyPanelSizes();
-    impl_->SyncRulers();
+    impl_->overlay_dirty = true;
 }
 
-void StudioUI::OnMouseMove(int x, int y) {
-    impl_->mouse_x = x;
-    impl_->mouse_y = y;
-    if (!impl_->engine || !impl_->doc) return;
+void StudioUI::Impl::FlushPendingMouseMove() {
+    if (!mouse_moved_this_frame) return;
+    mouse_moved_this_frame = false;
+    const int x = pending_mouse_x;
+    const int y = pending_mouse_y;
+    mouse_x = x;
+    mouse_y = y;
+    if (!engine || !doc) return;
 
-    if (impl_->cp_drag != Impl::CpDrag::None) {
-        if (impl_->cp_drag == Impl::CpDrag::SV) impl_->UpdateColorPickerFromSVMouse(x, y);
-        else if (impl_->cp_drag == Impl::CpDrag::Hue) impl_->UpdateColorPickerFromHueMouse(y);
+    if (cp_drag != CpDrag::None) {
+        hovered_node_id = -1;
+        if (cp_drag == CpDrag::SV) UpdateColorPickerFromSVMouse(x, y);
+        else if (cp_drag == CpDrag::Hue) UpdateColorPickerFromHueMouse(y);
         return;
     }
 
-    if (impl_->splitter_drag != Impl::SplitterDrag::None) {
-        if (impl_->splitter_drag == Impl::SplitterDrag::Left) {
-            impl_->left_panel_width = impl_->split_start_size + (float)(x - impl_->split_start_mouse);
-        } else if (impl_->splitter_drag == Impl::SplitterDrag::Right) {
-            impl_->right_inspector_width = impl_->split_start_size - (float)(x - impl_->split_start_mouse);
-        } else if (impl_->splitter_drag == Impl::SplitterDrag::Bottom) {
-            impl_->bottom_dock_height = impl_->split_start_size - (float)(y - impl_->split_start_mouse);
+    if (splitter_drag != SplitterDrag::None) {
+        hovered_node_id = -1;
+        if (splitter_drag == SplitterDrag::Left) {
+            left_panel_width = split_start_size + (float)(x - split_start_mouse);
+        } else if (splitter_drag == SplitterDrag::Right) {
+            right_inspector_width = split_start_size - (float)(x - split_start_mouse);
+        } else if (splitter_drag == SplitterDrag::Bottom) {
+            bottom_dock_height = split_start_size - (float)(y - split_start_mouse);
         }
-        impl_->ApplyPanelSizes();
-        impl_->SyncRulers();
+        ApplyPanelSizes();
+        overlay_dirty = true;
         return;
     }
 
-    if (impl_->panning) {
-        impl_->pan_x = impl_->pan_start_x + (float)(x - impl_->pan_start_mx);
-        impl_->pan_y = impl_->pan_start_y + (float)(y - impl_->pan_start_my);
-        impl_->SyncRulers();
+    if (viewport.UpdatePan(x, y)) {
+        hovered_node_id = -1;
+        overlay_dirty = true;
         return;
     }
 
-    if (impl_->drag_pending) {
-        int mdx = std::abs(x - impl_->drag_down_mx);
-        int mdy = std::abs(y - impl_->drag_down_my);
+    if (gizmo.drag_pending) {
+        int mdx = std::abs(x - gizmo.drag_down_mx);
+        int mdy = std::abs(y - gizmo.drag_down_my);
         if (mdx < 4 && mdy < 4) return;
-        impl_->drag_pending = false;
-        impl_->drag_did_move = true;
-        impl_->PushUndo();
-        impl_->drag_mode = Impl::DragMode::Move;
-        for (const auto& orig : impl_->drag_multi_orig) {
-            if (auto* n = impl_->doc->FindNode(orig.id)) {
-                n->x = orig.x;
-                n->y = orig.y;
-                n->width = orig.w;
-                n->height = orig.h;
-            }
-        }
-    }
-
-    if (impl_->drag_mode != Impl::DragMode::None) {
-        float cx = 0.0f, cy = 0.0f;
-        impl_->ScreenToCanvas(x, y, cx, cy);
-        float dx = cx - impl_->drag_start_sx;
-        float dy = cy - impl_->drag_start_sy;
-        if (impl_->drag_mode == Impl::DragMode::Move) {
-            bool bypass_snap = IsCtrlDown(impl_->window);
-            float snapped_dx = dx, snapped_dy = dy;
-            impl_->ComputeDragSnapMove(impl_->PrimaryId(), dx, dy, bypass_snap, snapped_dx, snapped_dy);
-            impl_->drag_dirty_node_ids.clear();
-            for (const auto& orig : impl_->drag_multi_orig) {
-                if (auto* n = impl_->doc->FindNode(orig.id)) {
-                    n->x = std::round(orig.x + snapped_dx);
-                    n->y = std::round(orig.y + snapped_dy);
-                    n->modified_transform = true;
-                    impl_->drag_dirty_node_ids.push_back(n->id);
+        gizmo.drag_pending = false;
+        gizmo.drag_did_move = true;
+        PushUndo();
+        gizmo.drag_mode = GizmoManipulator::DragMode::Move;
+        gizmo.drag_is_flow = false;
+        gizmo.drag_flow_reordered = false;
+        gizmo.flow_guide.active = false;
+        if (gizmo.drag_multi_orig.size() == 1) {
+            if (const auto* dn = doc->FindNode(gizmo.drag_multi_orig[0].id)) {
+                gizmo.drag_is_flow = IsNodeFlowManaged(*dn);
+                if (gizmo.drag_is_flow) {
+                    gizmo.CaptureFlowDragState(doc, engine, dn->id);
                 }
             }
-            impl_->drag_transform_ui_dirty = true;
-        } else if (impl_->drag_mode == Impl::DragMode::Resize) {
-            if (auto* n = impl_->doc->FindNode(impl_->PrimaryId())) {
-                float nx = impl_->orig_x, ny = impl_->orig_y, nw = impl_->orig_w, nh = impl_->orig_h;
-                int h = impl_->drag_handle;
+        }
+        if (!gizmo.drag_is_flow) {
+            for (const auto& orig : gizmo.drag_multi_orig) {
+                if (auto* n = doc->FindNode(orig.id)) {
+                    if (IsNodeFlowManaged(*n)) continue;
+                    n->x = orig.x;
+                    n->y = orig.y;
+                    n->width = orig.w;
+                    n->height = orig.h;
+                }
+            }
+        }
+    }
+
+    if (gizmo.drag_mode != GizmoManipulator::DragMode::None) {
+        hovered_node_id = -1;
+        float cx = 0.0f, cy = 0.0f;
+        ScreenToCanvas(x, y, cx, cy);
+        float dx = cx - gizmo.drag_start_sx;
+        float dy = cy - gizmo.drag_start_sy;
+        if (gizmo.drag_mode == GizmoManipulator::DragMode::Move) {
+            if (gizmo.drag_is_flow) {
+                ComputeAndApplyFlowDragMove(PrimaryId(), cx, cy);
+            } else {
+                bool bypass_snap = IsCtrlDown(window);
+                float snapped_dx = dx, snapped_dy = dy;
+                ComputeDragSnapMove(PrimaryId(), dx, dy, bypass_snap, snapped_dx, snapped_dy);
+                gizmo.drag_dirty_node_ids.clear();
+                for (const auto& orig : gizmo.drag_multi_orig) {
+                    if (auto* n = doc->FindNode(orig.id)) {
+                        if (IsNodeFlowManaged(*n)) continue;
+                        n->x = std::round(orig.x + snapped_dx);
+                        n->y = std::round(orig.y + snapped_dy);
+                        n->modified_transform = true;
+                        gizmo.drag_dirty_node_ids.push_back(n->id);
+                    }
+                }
+                gizmo.drag_transform_ui_dirty = true;
+            }
+        } else if (gizmo.drag_mode == GizmoManipulator::DragMode::Resize) {
+            if (auto* n = doc->FindNode(PrimaryId())) {
+                float nx = gizmo.orig_x, ny = gizmo.orig_y, nw = gizmo.orig_w, nh = gizmo.orig_h;
+                int h = gizmo.drag_handle;
                 if (h == 0 || h == 6 || h == 7) { float d = std::min(dx, nw - 12.0f); nx += d; nw -= d; }
                 if (h == 2 || h == 3 || h == 4) { nw = std::max(12.0f, nw + dx); }
                 if (h == 0 || h == 1 || h == 2) { float d = std::min(dy, nh - 12.0f); ny += d; nh -= d; }
                 if (h == 4 || h == 5 || h == 6) { nh = std::max(12.0f, nh + dy); }
-                bool bypass_snap = IsCtrlDown(impl_->window);
-                impl_->ComputeDragSnapResize(n->id, h, bypass_snap, nx, ny, nw, nh);
+                bool bypass_snap = IsCtrlDown(window);
+                ComputeDragSnapResize(n->id, h, bypass_snap, nx, ny, nw, nh);
                 n->x = std::round(nx);
                 n->y = std::round(ny);
                 n->width = std::round(nw);
                 n->height = std::round(nh);
-                n->modified_transform = true;
-                if (!n->children.empty() && !impl_->undo_stack.empty()) {
-                    impl_->RestoreSubtreeForConstraintDrag(impl_->undo_stack.back(), n->id);
-                    impl_->doc->ApplyConstraintsOnParentResize(n->id, impl_->orig_w, impl_->orig_h, n->width, n->height);
+                if (h == 0 || h == 2 || h == 3 || h == 4 || h == 6 || h == 7) {
+                    n->size_mode_w = 0;
+                    if (n->anchor_h == 2) n->anchor_h = 0;
                 }
-                impl_->drag_dirty_node_ids.clear();
-                impl_->drag_dirty_node_ids.push_back(n->id);
-                impl_->drag_transform_ui_dirty = true;
+                if (h == 0 || h == 1 || h == 2 || h == 4 || h == 5 || h == 6) {
+                    n->size_mode_h = 0;
+                    if (n->anchor_v == 2) n->anchor_v = 0;
+                }
+                n->modified_transform = true;
+                if (const RmlDocument* snap = history.LatestUndoSnapshot(); !n->children.empty() && snap) {
+                    RestoreSubtreeForConstraintDrag(*snap, n->id);
+                    doc->ApplyConstraintsOnParentResize(n->id, gizmo.orig_w, gizmo.orig_h, n->width, n->height);
+                }
+                gizmo.drag_dirty_node_ids.clear();
+                gizmo.drag_dirty_node_ids.push_back(n->id);
+                gizmo.drag_transform_ui_dirty = true;
             }
         }
         return;
     }
 
-    if (impl_->play_mode && impl_->IsPointInCanvasViewport(x, y)) {
+    if (IsPointInCanvasViewport(x, y)) {
         float cx = 0.0f, cy = 0.0f;
-        impl_->ScreenToCanvas(x, y, cx, cy);
-        impl_->engine->CanvasMouseMove((int)std::round(cx), (int)std::round(cy));
+        ScreenToCanvas(x, y, cx, cy);
+        if (play_mode) {
+            engine->CanvasMouseMove((int)std::round(cx), (int)std::round(cy));
+            hovered_node_id = -1;
+        } else if (!hand_tool) {
+            int hit = engine->PickNodeAtCanvasPoint(cx, cy);
+            hovered_node_id = (hit > 0) ? hit : -1;
+        } else {
+            hovered_node_id = -1;
+        }
+    } else {
+        hovered_node_id = -1;
     }
 
-    if (auto* ectx = impl_->engine->EditorContext()) {
-        ectx->ProcessMouseMove(x, y, GetRmlKeyModifiers(impl_->window));
+    if (auto* ectx = engine->EditorContext()) {
+        ectx->ProcessMouseMove(x, y, GetRmlKeyModifiers(window));
     }
+}
+
+void StudioUI::OnMouseMove(int x, int y) {
+    impl_->pending_mouse_x = x;
+    impl_->pending_mouse_y = y;
+    impl_->mouse_moved_this_frame = true;
 }
 
 void StudioUI::OnMouseButton(int button, bool down) {
     if (!impl_->engine || !impl_->doc) return;
+    impl_->FlushPendingMouseMove();
     int x = impl_->mouse_x;
     int y = impl_->mouse_y;
 
@@ -6672,41 +7106,42 @@ void StudioUI::OnMouseButton(int button, bool down) {
         }
     }
 
-    if (!down && impl_->panning) {
-        impl_->panning = false;
+    if (!down && impl_->viewport.panning) {
+        impl_->viewport.EndPan();
         return;
     }
 
     if (button == 2 || (button == 0 && (impl_->space_down || impl_->hand_tool))) {
         if (down && impl_->IsPointInCanvasViewport(x, y)) {
-            impl_->panning = true;
-            impl_->pan_start_mx = x;
-            impl_->pan_start_my = y;
-            impl_->pan_start_x = impl_->pan_x;
-            impl_->pan_start_y = impl_->pan_y;
+            impl_->viewport.BeginPan(x, y);
             return;
         }
     }
 
-    if (!down && impl_->drag_pending) {
-        impl_->drag_pending = false;
-        impl_->drag_did_move = false;
-        impl_->drag_multi_orig.clear();
+    if (!down && impl_->gizmo.drag_pending) {
+        impl_->gizmo.drag_pending = false;
+        impl_->gizmo.drag_did_move = false;
+        impl_->gizmo.drag_multi_orig.clear();
                 return;
     }
 
-    if (!down && impl_->drag_mode != Impl::DragMode::None) {
-        auto prev_mode = impl_->drag_mode;
-        bool did_move = impl_->drag_did_move;
-        impl_->drag_mode = Impl::DragMode::None;
-        impl_->drag_did_move = false;
-        impl_->drag_transform_ui_dirty = false;
-        impl_->active_guides.clear();
-                if (!impl_->doc->has_imported_source && did_move &&
-            prev_mode == Impl::DragMode::Move && impl_->drag_multi_orig.size() == 1) {
-            impl_->AutoReparentAfterMove(impl_->drag_multi_orig[0].id);
+    if (!down && impl_->gizmo.drag_mode != GizmoManipulator::DragMode::None) {
+        auto prev_mode = impl_->gizmo.drag_mode;
+        bool did_move = impl_->gizmo.drag_did_move;
+        bool was_flow = impl_->gizmo.drag_is_flow;
+        impl_->gizmo.drag_mode = GizmoManipulator::DragMode::None;
+        impl_->gizmo.drag_did_move = false;
+        impl_->gizmo.drag_is_flow = false;
+        impl_->gizmo.drag_flow_reordered = false;
+        impl_->gizmo.drag_sib_bounds.clear();
+        impl_->gizmo.flow_guide.active = false;
+        impl_->gizmo.drag_transform_ui_dirty = false;
+        impl_->gizmo.active_guides.clear();
+        if (!impl_->doc->has_imported_source && !was_flow && did_move &&
+            prev_mode == GizmoManipulator::DragMode::Move && impl_->gizmo.drag_multi_orig.size() == 1) {
+            impl_->AutoReparentAfterMove(impl_->gizmo.drag_multi_orig[0].id);
         }
-        impl_->drag_multi_orig.clear();
+        impl_->gizmo.drag_multi_orig.clear();
         impl_->doc->Touch();
         impl_->SyncUIFromDoc(true);
         return;
@@ -6723,34 +7158,30 @@ void StudioUI::OnMouseButton(int button, bool down) {
         }
 
         if (button == 0 && down) {
-            if (impl_->selected_ids.size() == 1) {
+            if (impl_->gizmo.selected_ids.size() == 1) {
                 if (auto* sel = impl_->doc->FindNode(impl_->PrimaryId())) {
                     if (sel->id != impl_->doc->root_id && !sel->locked) {
                         int h = impl_->HitTestHandle(x, y, *sel);
                         if (h >= 0) {
                             impl_->PushUndo();
-                            impl_->drag_mode = Impl::DragMode::Resize;
-                            impl_->drag_handle = h;
-                            impl_->drag_start_sx = cx;
-                            impl_->drag_start_sy = cy;
+                            impl_->gizmo.drag_mode = GizmoManipulator::DragMode::Resize;
+                            impl_->gizmo.drag_handle = h;
+                            impl_->gizmo.drag_start_sx = cx;
+                            impl_->gizmo.drag_start_sy = cy;
                             float rx = sel->x, ry = sel->y, rw = sel->width, rh = sel->height;
                             float ax = 0.0f, ay = 0.0f, aw = 0.0f, ah = 0.0f;
                             if (impl_->engine->GetCanvasElementRect(sel->id, ax, ay, aw, ah)) {
                                 rw = std::max(8.0f, aw);
                                 rh = std::max(8.0f, ah);
                                 float ox = 0.0f, oy = 0.0f;
-                                if (impl_->engine->GetCanvasElementOffsetParentOrigin(sel->id, ox, oy)) {
-                                    rx = ax - ox;
-                                    ry = ay - oy;
-                                } else {
-                                    rx = ax;
-                                    ry = ay;
-                                }
+                                impl_->GetParentCanvasOrigin(sel->parent_id, ox, oy, sel->id);
+                                rx = ax - ox;
+                                ry = ay - oy;
                             }
-                            impl_->orig_x = rx;
-                            impl_->orig_y = ry;
-                            impl_->orig_w = rw;
-                            impl_->orig_h = rh;
+                            impl_->gizmo.orig_x = rx;
+                            impl_->gizmo.orig_y = ry;
+                            impl_->gizmo.orig_w = rw;
+                            impl_->gizmo.orig_h = rh;
                                                         return;
                         }
                     }
@@ -6769,8 +7200,8 @@ void StudioUI::OnMouseButton(int button, bool down) {
                         impl_->SyncUIFromDoc(true);
                     }
                 }
-                impl_->drag_multi_orig.clear();
-                for (int sid : impl_->selected_ids) {
+                impl_->gizmo.drag_multi_orig.clear();
+                for (int sid : impl_->gizmo.selected_ids) {
                     if (sid == impl_->doc->root_id) continue;
                     if (const auto* sn = impl_->doc->FindNode(sid); sn && !sn->locked) {
                         float rx = sn->x, ry = sn->y, rw = sn->width, rh = sn->height;
@@ -6779,24 +7210,20 @@ void StudioUI::OnMouseButton(int button, bool down) {
                             rw = std::max(8.0f, aw);
                             rh = std::max(8.0f, ah);
                             float ox = 0.0f, oy = 0.0f;
-                            if (impl_->engine->GetCanvasElementOffsetParentOrigin(sn->id, ox, oy)) {
-                                rx = ax - ox;
-                                ry = ay - oy;
-                            } else {
-                                rx = ax;
-                                ry = ay;
-                            }
+                            impl_->GetParentCanvasOrigin(sn->parent_id, ox, oy, sn->id);
+                            rx = ax - ox;
+                            ry = ay - oy;
                         }
-                        impl_->drag_multi_orig.push_back({sid, rx, ry, rw, rh});
+                        impl_->gizmo.drag_multi_orig.push_back({sid, rx, ry, rw, rh});
                     }
                 }
-                if (!ctrl && !impl_->drag_multi_orig.empty()) {
-                    impl_->drag_pending = true;
-                    impl_->drag_did_move = false;
-                    impl_->drag_down_mx = x;
-                    impl_->drag_down_my = y;
-                    impl_->drag_start_sx = cx;
-                    impl_->drag_start_sy = cy;
+                if (!ctrl && !impl_->gizmo.drag_multi_orig.empty()) {
+                    impl_->gizmo.drag_pending = true;
+                    impl_->gizmo.drag_did_move = false;
+                    impl_->gizmo.drag_down_mx = x;
+                    impl_->gizmo.drag_down_my = y;
+                    impl_->gizmo.drag_start_sx = cx;
+                    impl_->gizmo.drag_start_sy = cy;
                                     }
             } else if (!ctrl) {
                 impl_->SetSingleSelection(impl_->doc->root_id);
@@ -6844,20 +7271,16 @@ static bool IsNumericInspectorInputId(const std::string& eid) {
 
 void StudioUI::OnMouseWheel(float delta) {
     if (!impl_->engine) return;
+    impl_->FlushPendingMouseMove();
     if (impl_->IsPointInCanvasViewport(impl_->mouse_x, impl_->mouse_y)) {
         if (impl_->play_mode) {
             impl_->engine->CanvasMouseWheel(delta);
             return;
         }
-        float old_zoom = impl_->zoom;
         float factor = (delta > 0.0f) ? 1.1f : (1.0f / 1.1f);
-        impl_->zoom = std::clamp(impl_->zoom * factor, 0.1f, 4.0f);
-        float mx = (float)impl_->mouse_x;
-        float my = (float)impl_->mouse_y;
-        impl_->pan_x = mx - (mx - impl_->pan_x) * (impl_->zoom / old_zoom);
-        impl_->pan_y = my - (my - impl_->pan_y) * (impl_->zoom / old_zoom);
+        impl_->viewport.ZoomAtPoint((float)impl_->mouse_x, (float)impl_->mouse_y, factor, 0.1f, 4.0f);
         impl_->UpdateZoomLabel();
-        impl_->SyncRulers();
+        impl_->overlay_dirty = true;
         return;
     }
 
@@ -6892,6 +7315,7 @@ void StudioUI::OnMouseWheel(float delta) {
         }
         ectx->ProcessMouseWheel(Rml::Vector2f(0.0f, -delta), GetRmlKeyModifiers(impl_->window));
         impl_->SyncCodeGutter(false);
+        impl_->SyncVisibleLayers(false);
     }
 }
 
@@ -7073,56 +7497,95 @@ void StudioUI::SetToggleFullscreenCallback(std::function<void()> cb) {
 void StudioUI::UpdateAndRender(GlRenderer2D& gl, int width, int height) {
     if (!impl_->doc || !impl_->engine) return;
 
+    const auto frame_start = std::chrono::steady_clock::now();
+    double interval_ms = 0.0;
+    if (impl_->telemetry.has_last_frame) {
+        interval_ms = std::chrono::duration<double, std::milli>(frame_start - impl_->telemetry.last_frame_tp).count();
+    }
+    impl_->telemetry.last_frame_tp = frame_start;
+    impl_->telemetry.has_last_frame = true;
+
+    impl_->FlushPendingMouseMove();
     impl_->DrainPendingCommands();
     impl_->UpdateToastTimer();
 
-    if (impl_->drag_mode == Impl::DragMode::None) {
+    if (impl_->gizmo.drag_mode == GizmoManipulator::DragMode::None) {
         impl_->SyncUIFromDoc(false);
-    } else if (impl_->drag_transform_ui_dirty) {
-        impl_->SyncTransformFieldsOnly();
-        impl_->drag_transform_ui_dirty = false;
     }
     impl_->SyncCodeGutter(false);
+    impl_->SyncVisibleLayers(false);
 
+    const auto canvas_t0 = std::chrono::steady_clock::now();
     if (impl_->play_mode) {
         impl_->engine->RenderCanvasInteractive();
-    } else if (impl_->drag_mode != Impl::DragMode::None && !impl_->drag_dirty_node_ids.empty()) {
-        bool fallback_full = false;
-        for (int nid : impl_->drag_dirty_node_ids) {
-            if (const auto* dn = impl_->doc->FindNode(nid)) {
-                const auto* dp = impl_->doc->FindNode(dn->parent_id);
-                if (!dn->children.empty() || dn->size_mode_w != 0 || dn->size_mode_h != 0 ||
-                    dn->anchor_h != 0 || dn->anchor_v != 0 || (dp && dp->display_flex)) {
-                    fallback_full = true;
-                    break;
-                }
-                if (!impl_->engine->SetCanvasNodeBoxProps(
-                        dn->id, dn->x, dn->y, dn->width, dn->height,
-                        impl_->unit_mode == "%",
-                        (float)impl_->doc->screen_width, (float)impl_->doc->screen_height)) {
-                    fallback_full = true;
-                    break;
+    } else if (impl_->gizmo.drag_mode != GizmoManipulator::DragMode::None &&
+               (impl_->gizmo.drag_flow_reordered || !impl_->gizmo.drag_dirty_node_ids.empty())) {
+        bool fallback_full = impl_->gizmo.drag_flow_reordered;
+        if (!fallback_full) {
+            for (int nid : impl_->gizmo.drag_dirty_node_ids) {
+                if (const auto* dn = impl_->doc->FindNode(nid)) {
+                    if (!dn->children.empty() && impl_->gizmo.drag_mode == GizmoManipulator::DragMode::Resize) {
+                        fallback_full = true;
+                        break;
+                    }
+                    if (!impl_->engine->SetCanvasNodeBoxProps(
+                            *dn,
+                            (float)impl_->doc->screen_width, (float)impl_->doc->screen_height)) {
+                        fallback_full = true;
+                        break;
+                    }
                 }
             }
         }
         if (fallback_full) {
-            impl_->engine->SyncAndRenderCanvas(*impl_->doc);
+            impl_->engine->SyncAndRenderCanvas(*impl_->doc, true);
         } else {
             impl_->engine->FlushCanvasRender();
         }
-        impl_->drag_dirty_node_ids.clear();
+        // Keep RmlNode x/y synchronized with actual rendered coordinates for flow/relative offsets
+        for (int nid : impl_->gizmo.drag_dirty_node_ids) {
+            if (auto* dn = impl_->doc->FindNode(nid); dn && dn->pos_mode != RmlPositionMode::Absolute) {
+                float ax = 0.0f, ay = 0.0f, aw = 0.0f, ah = 0.0f;
+                if (impl_->engine->GetCanvasElementRect(dn->id, ax, ay, aw, ah)) {
+                    float ox = 0.0f, oy = 0.0f;
+                    impl_->GetParentCanvasOrigin(dn->parent_id, ox, oy, dn->id);
+                    dn->x = std::round(ax - ox);
+                    dn->y = std::round(ay - oy);
+                }
+            }
+        }
+        if (impl_->gizmo.drag_flow_reordered) {
+            impl_->gizmo.drag_flow_reordered = false;
+            impl_->gizmo.CaptureFlowDragState(impl_->doc, impl_->engine, impl_->PrimaryId());
+        }
+        impl_->gizmo.drag_dirty_node_ids.clear();
     } else {
         impl_->engine->SyncAndRenderCanvas(*impl_->doc);
+    }
+    const auto canvas_t1 = std::chrono::steady_clock::now();
+    const double canvas_ms = std::chrono::duration<double, std::milli>(canvas_t1 - canvas_t0).count();
+
+    impl_->RefreshDiagnostics(false);
+
+    if (impl_->gizmo.drag_mode != GizmoManipulator::DragMode::None && impl_->gizmo.drag_transform_ui_dirty) {
+        impl_->SyncTransformFieldsOnly();
+        impl_->gizmo.drag_transform_ui_dirty = false;
     }
 
     impl_->SyncArtboardOverlay();
 
     gl.BeginFrame(width, height);
 
-    float cw = (float)impl_->doc->screen_width * impl_->zoom;
-    float ch = (float)impl_->doc->screen_height * impl_->zoom;
-    float px = impl_->pan_x;
-    float py = impl_->pan_y;
+    float cw = (float)impl_->doc->screen_width * impl_->viewport.zoom;
+    float ch = (float)impl_->doc->screen_height * impl_->viewport.zoom;
+    float px = impl_->viewport.pan_x;
+    float py = impl_->viewport.pan_y;
+    if (std::abs(impl_->viewport.zoom - 1.0f) < 0.001f) {
+        px = std::round(px);
+        py = std::round(py);
+        cw = std::round(cw);
+        ch = std::round(ch);
+    }
 
     float vp_x0 = impl_->LeftTotal();
     float vp_y0 = impl_->TopTotal();
@@ -7161,22 +7624,11 @@ void StudioUI::UpdateAndRender(GlRenderer2D& gl, int width, int height) {
     }
 
     if (unsigned int canvas_tex = impl_->engine->CanvasTexture()) {
-        gl.DrawTexturedQuad(canvas_tex, px, py, cw, ch);
+        gl.DrawTexturedQuad(canvas_tex, px, py, cw, ch, impl_->viewport.zoom, impl_->engine->CanvasTextureVersion());
     }
 
     // Artboard 32px blueprint grid (adapts dark/light contrast)
-    if (impl_->show_grid) {
-        float lum = 0.299f * (float)brd_col.r + 0.587f * (float)brd_col.g + 0.114f * (float)brd_col.b;
-        uint8_t gr = (lum > 140.0f) ? 0 : 255;
-        uint8_t ga = (lum > 140.0f) ? 24 : 11;
-        float step = std::max(14.0f, 32.0f * (impl_->zoom < 0.7f ? 1.0f : impl_->zoom));
-        for (float gx = px + step; gx < px + cw; gx += step) {
-            gl.DrawRectFilled(gx, py, 1.0f, ch, gr, gr, gr, ga);
-        }
-        for (float gy = py + step; gy < py + ch; gy += step) {
-            gl.DrawRectFilled(px, gy, cw, 1.0f, gr, gr, gr, ga);
-        }
-    }
+    impl_->viewport.RenderBlueprintGrid(gl, px, py, cw, ch, brd_col.r, brd_col.g, brd_col.b);
 
     // Per-container Layout Grids (Columns / Rows / Uniform Grid)
     if (!impl_->play_mode) {
@@ -7186,10 +7638,10 @@ void StudioUI::UpdateAndRender(GlRenderer2D& gl, int width, int height) {
             if (gn.id != impl_->doc->root_id) {
                 float wx = 0.0f, wy = 0.0f, ww = gn.width, wh = gn.height;
                 impl_->GetNodeCanvasBounds(gn.id, wx, wy, ww, wh);
-                nx = px + wx * impl_->zoom;
-                ny = py + wy * impl_->zoom;
-                nw = ww * impl_->zoom;
-                nh = wh * impl_->zoom;
+                nx = px + wx * impl_->viewport.zoom;
+                ny = py + wy * impl_->viewport.zoom;
+                nw = ww * impl_->viewport.zoom;
+                nh = wh * impl_->viewport.zoom;
             }
             if (nw < 8.0f || nh < 8.0f) continue;
 
@@ -7198,8 +7650,8 @@ void StudioUI::UpdateAndRender(GlRenderer2D& gl, int width, int height) {
             uint8_t edge_a = (uint8_t)std::min(200, (int)ca * 2);
             if (gn.grid_type == 0) {
                 int cnt = std::clamp(gn.grid_count, 1, 48);
-                float margin = std::max(0.0f, gn.grid_margin) * impl_->zoom;
-                float gutter = std::max(0.0f, gn.grid_gutter) * impl_->zoom;
+                float margin = std::max(0.0f, gn.grid_margin) * impl_->viewport.zoom;
+                float gutter = std::max(0.0f, gn.grid_gutter) * impl_->viewport.zoom;
                 float avail = nw - margin * 2.0f - gutter * (float)(cnt - 1);
                 if (avail > 2.0f) {
                     float col_w = avail / (float)cnt;
@@ -7214,8 +7666,8 @@ void StudioUI::UpdateAndRender(GlRenderer2D& gl, int width, int height) {
                 }
             } else if (gn.grid_type == 1) {
                 int cnt = std::clamp(gn.grid_count, 1, 48);
-                float margin = std::max(0.0f, gn.grid_margin) * impl_->zoom;
-                float gutter = std::max(0.0f, gn.grid_gutter) * impl_->zoom;
+                float margin = std::max(0.0f, gn.grid_margin) * impl_->viewport.zoom;
+                float gutter = std::max(0.0f, gn.grid_gutter) * impl_->viewport.zoom;
                 float avail = nh - margin * 2.0f - gutter * (float)(cnt - 1);
                 if (avail > 2.0f) {
                     float row_h = avail / (float)cnt;
@@ -7229,7 +7681,7 @@ void StudioUI::UpdateAndRender(GlRenderer2D& gl, int width, int height) {
                     }
                 }
             } else {
-                float step = std::max(6.0f, gn.grid_size * impl_->zoom);
+                float step = std::max(6.0f, gn.grid_size * impl_->viewport.zoom);
                 uint8_t line_a = (uint8_t)std::min(220, (int)ca * 2);
                 int guard = 0;
                 for (float gx = nx + step; gx < nx + nw && guard < 256; gx += step, ++guard) {
@@ -7259,72 +7711,69 @@ void StudioUI::UpdateAndRender(GlRenderer2D& gl, int width, int height) {
         }
     }
 
-    // Selection gizmo & corner handles (#4778F5 outline + #A8BEFF square handles)
+    // Hover outline (1x/frame coalesced pick) + Selection gizmo, corner handles, smart guides & flow insertion indicator
     if (!impl_->play_mode) {
-        int primary = impl_->PrimaryId();
-        for (int sid : impl_->selected_ids) {
-            if (const auto* sel = impl_->doc->FindNode(sid)) {
-                if (sel->id == impl_->doc->root_id) {
-                    // Artboard subtle selection corners like .selection-outline:before/:after
-                    gl.DrawRectOutline(px, py, cw, ch, 1.0f, 71, 120, 245, 110);
-                    gl.DrawRectFilled(px - 3.0f, py - 3.0f, 6.0f, 6.0f, 71, 120, 245, 255);
-                    gl.DrawRectOutline(px - 3.0f, py - 3.0f, 6.0f, 6.0f, 1.0f, 168, 190, 255, 255);
-                    gl.DrawRectFilled(px + cw - 3.0f, py + ch - 3.0f, 6.0f, 6.0f, 71, 120, 245, 255);
-                    gl.DrawRectOutline(px + cw - 3.0f, py + ch - 3.0f, 6.0f, 6.0f, 1.0f, 168, 190, 255, 255);
-                    continue;
-                }
-                float wx = 0.0f, wy = 0.0f, ww = sel->width, wh = sel->height;
-                if (!impl_->engine->GetCanvasElementRect(sel->id, wx, wy, ww, wh)) {
-                    impl_->doc->GetWorldPos(sel->id, wx, wy);
-                    ww = sel->width;
-                    wh = sel->height;
-                }
-                float sx = px + wx * impl_->zoom;
-                float sy = py + wy * impl_->zoom;
-                float sw = ww * impl_->zoom;
-                float sh = wh * impl_->zoom;
-
-                gl.DrawRectOutline(sx, sy, sw, sh, (sid == primary) ? 1.5f : 1.0f, 71, 120, 245, 255);
-                if (impl_->selected_ids.size() == 1 && !sel->locked) {
-                    float xm = sx + sw * 0.5f;
-                    float ym = sy + sh * 0.5f;
-                    float pts[8][2] = {
-                        {sx, sy}, {xm, sy}, {sx + sw, sy}, {sx + sw, ym},
-                        {sx + sw, sy + sh}, {xm, sy + sh}, {sx, sy + sh}, {sx, ym}
-                    };
-                    for (int i = 0; i < 8; ++i) {
-                        gl.DrawRectFilled(pts[i][0] - 4.0f, pts[i][1] - 4.0f, 8.0f, 8.0f, 168, 190, 255, 255);
-                        gl.DrawRectOutline(pts[i][0] - 4.0f, pts[i][1] - 4.0f, 8.0f, 8.0f, 1.2f, 71, 120, 245, 255);
-                    }
-                }
+        if (impl_->gizmo.drag_mode == GizmoManipulator::DragMode::None &&
+            impl_->hovered_node_id > 0 &&
+            impl_->hovered_node_id != impl_->doc->root_id &&
+            !impl_->IsSelected(impl_->hovered_node_id)) {
+            float hx = 0.0f, hy = 0.0f, hw = 0.0f, hh = 0.0f;
+            if (impl_->GetNodeCanvasBounds(impl_->hovered_node_id, hx, hy, hw, hh) && hw > 1.0f && hh > 1.0f) {
+                gl.DrawRectOutline(
+                    px + hx * impl_->viewport.zoom,
+                    py + hy * impl_->viewport.zoom,
+                    hw * impl_->viewport.zoom,
+                    hh * impl_->viewport.zoom,
+                    1.0f, 56, 189, 248, 130);
             }
         }
-
-        // Smart Guides overlay (magenta alignment lines & endpoint markers)
-        if (!impl_->active_guides.empty()) {
-            for (const auto& g : impl_->active_guides) {
-                if (g.vertical) {
-                    float gx = px + g.coord * impl_->zoom;
-                    float gy0 = py + g.span_min * impl_->zoom - 6.0f;
-                    float gy1 = py + g.span_max * impl_->zoom + 6.0f;
-                    gl.DrawRectFilled(gx, gy0, 1.0f, std::max(2.0f, gy1 - gy0), 255, 46, 147, 235);
-                    gl.DrawRectFilled(gx - 2.5f, gy0, 6.0f, 1.0f, 255, 46, 147, 235);
-                    gl.DrawRectFilled(gx - 2.5f, gy1 - 1.0f, 6.0f, 1.0f, 255, 46, 147, 235);
-                } else {
-                    float gy = py + g.coord * impl_->zoom;
-                    float gx0 = px + g.span_min * impl_->zoom - 6.0f;
-                    float gx1 = px + g.span_max * impl_->zoom + 6.0f;
-                    gl.DrawRectFilled(gx0, gy, std::max(2.0f, gx1 - gx0), 1.0f, 255, 46, 147, 235);
-                    gl.DrawRectFilled(gx0, gy - 2.5f, 1.0f, 6.0f, 255, 46, 147, 235);
-                    gl.DrawRectFilled(gx1 - 1.0f, gy - 2.5f, 1.0f, 6.0f, 255, 46, 147, 235);
-                }
-            }
-        }
+        impl_->gizmo.RenderOverlay(gl, impl_->doc, impl_->engine, impl_->viewport, px, py, cw, ch);
     }
 
     gl.ClearScissor();
 
+    if (impl_->viewport.show_rulers) {
+        GlRenderer2D::RulerOverlayDesc rdesc;
+        rdesc.show_top = true;
+        rdesc.show_left = impl_->viewport.show_left_ruler;
+        rdesc.vp_x = vp_x0;
+        rdesc.vp_y = vp_y0;
+        rdesc.vp_w = vp_x1 - vp_x0;
+        rdesc.vp_h = vp_y1 - vp_y0;
+        rdesc.ruler_h = Impl::kRulerH;
+        rdesc.ruler_left_w = Impl::kRulerLeftW;
+        rdesc.pan_x = px;
+        rdesc.pan_y = py;
+        rdesc.zoom = impl_->viewport.zoom;
+        if (!impl_->play_mode) {
+            if (const int sel_id = impl_->PrimaryId(); sel_id > 0 && sel_id != impl_->doc->root_id) {
+                rdesc.has_selection = impl_->GetNodeCanvasBounds(sel_id, rdesc.sel_x, rdesc.sel_y, rdesc.sel_w, rdesc.sel_h);
+            }
+        }
+        gl.DrawRulerOverlay(rdesc);
+    }
+    gl.Flush();
+
+    const auto editor_t0 = std::chrono::steady_clock::now();
     impl_->engine->RenderEditor();
+    const auto frame_end = std::chrono::steady_clock::now();
+    const double editor_ms = std::chrono::duration<double, std::milli>(frame_end - editor_t0).count();
+    const double work_ms = std::chrono::duration<double, std::milli>(frame_end - frame_start).count();
+    if (interval_ms > 0.01) {
+        impl_->telemetry.PushSample(interval_ms, work_ms, canvas_ms, editor_ms);
+        const double now_sec = glfwGetTime();
+        if (now_sec - impl_->telemetry.last_ui_update_sec >= 0.25) {
+            impl_->telemetry.last_ui_update_sec = now_sec;
+            double avg_work = 0.0, avg_canvas = 0.0, avg_editor = 0.0, avg_fps = 0.0;
+            impl_->telemetry.Averages(avg_work, avg_canvas, avg_editor, avg_fps);
+            if (auto* sp = impl_->ui_doc ? impl_->ui_doc->GetElementById("sb-perf") : nullptr) {
+                char buf[96];
+                std::snprintf(buf, sizeof(buf), "%.0f FPS \xC2\xB7 %.1fms (C:%.1f E:%.1f)",
+                              avg_fps, avg_work, avg_canvas, avg_editor);
+                SetElementTextFast(sp, buf);
+            }
+        }
+    }
 }
 
 void StudioUI::SetStatus(const std::string& msg) {
@@ -7333,4 +7782,12 @@ void StudioUI::SetStatus(const std::string& msg) {
 
 bool StudioUI::ImportRcssPath(const std::string& path) {
     return impl_ ? impl_->ExecuteImportRcss(path) : false;
+}
+
+void StudioUI::GetPerfStats(double& out_fps, double& out_total_ms, double& out_canvas_ms, double& out_editor_ms) const {
+    if (!impl_) {
+        out_fps = out_total_ms = out_canvas_ms = out_editor_ms = 0.0;
+        return;
+    }
+    impl_->telemetry.Averages(out_total_ms, out_canvas_ms, out_editor_ms, out_fps);
 }

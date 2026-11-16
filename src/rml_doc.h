@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -15,6 +16,19 @@ struct RmlColor {
     std::string ToCss() const;
     void ToImGuiFloat4(float out[4]) const;
     void FromImGuiFloat4(const float in[4]);
+};
+
+enum class RmlCssUnit : uint8_t {
+    Px = 0,
+    Percent = 1,
+    Dp = 2,
+    Em = 3
+};
+
+enum class RmlPositionMode : uint8_t {
+    Static = 0,
+    Relative = 1,
+    Absolute = 2
 };
 
 struct RmlNode {
@@ -84,24 +98,41 @@ struct RmlNode {
     bool has_hover_bg = false;
     RmlColor hover_bg{0, 100, 220, 255};
 
-    // Image asset (for <img>)
+    // Image asset (for <img>) — shared immutable buffer across Undo/Redo snapshots
     std::string image_src;
-    std::vector<uint8_t> image_bytes;
+    std::shared_ptr<const std::vector<uint8_t>> image_data;
 
     // Raw DOM / preservation metadata (for imported .rml/.rcss)
     bool is_body_root = false;
     bool from_import = false;
     bool css_positioned = false;
+    RmlPositionMode pos_mode = RmlPositionMode::Absolute;
+    float rel_x = 0.0f;
+    float rel_y = 0.0f;
+    float margin_left = 0.0f;
+    float margin_top = 0.0f;
+    bool has_margin_left = false;
+    bool has_margin_top = false;
     bool modified_transform = false;
     bool modified_style = false;
+    bool explicit_anchor_or_margin = false;
+    RmlCssUnit unit_x = RmlCssUnit::Px;
+    RmlCssUnit unit_y = RmlCssUnit::Px;
+    RmlCssUnit unit_w = RmlCssUnit::Px;
+    RmlCssUnit unit_h = RmlCssUnit::Px;
+    float em_base_px = 14.0f;
+    float dp_ratio = 1.0f;
     std::vector<std::pair<std::string, std::string>> extra_attrs;
 
     std::vector<int> children;
+
+    /// Computes a concise fallback display label from DOM id, text/placeholder, first class, or tag.
+    std::string DefaultDisplayName(size_t max_text_bytes = 22) const;
 };
 
 struct RmlAsset {
     std::string filename;
-    std::vector<uint8_t> bytes;
+    std::shared_ptr<const std::vector<uint8_t>> data;
 };
 
 class RmlDocument {
@@ -114,6 +145,8 @@ public:
     uint64_t revision = 1;
     std::vector<RmlNode> nodes;
     std::string base_dir; // directory of imported .rml for resolving relative assets
+    // Shared immutable image asset cache (key -> buffer), preserved by pointer across Undo/Redo snapshots
+    std::unordered_map<std::string, std::shared_ptr<const std::vector<uint8_t>>> asset_cache;
 
     // Preserved imported RML/RCSS data
     bool has_imported_source = false;
@@ -127,6 +160,10 @@ public:
     void ResetDefaultScreen();
     RmlNode* FindNode(int id);
     const RmlNode* FindNode(int id) const;
+
+    std::shared_ptr<const std::vector<uint8_t>> CacheAssetBytes(const std::string& key, std::vector<uint8_t> bytes);
+    std::shared_ptr<const std::vector<uint8_t>> FindCachedAsset(const std::string& key) const;
+    void SetNodeImageBytes(int node_id, const std::string& filename, std::vector<uint8_t> bytes);
 
     // World/screen-space coordinates (in 1920x1080 space)
     void GetWorldPos(int id, float& out_x, float& out_y) const;
@@ -142,6 +179,7 @@ public:
     int DuplicateNode(int id);
     void MoveNode(int id, float dx, float dy);
     bool ReparentNode(int id, int new_parent_id);
+    bool ReorderChildNode(int parent_id, int child_id, int new_index);
     void ApplyConstraintsOnParentResize(int parent_id, float old_w, float old_h, float new_w, float new_h);
     void Touch() { ++revision; }
 
@@ -150,11 +188,14 @@ public:
         std::string& out_rcss,
         std::vector<RmlAsset>& out_assets,
         const std::string& rcss_filename = "style.rcss",
-        bool include_editor_ids = false
+        bool include_editor_ids = false,
+        std::unordered_map<int, std::string>* out_node_classes = nullptr
     ) const;
 
     bool ExportToPath(const std::string& rml_path, std::string& out_error) const;
     bool ImportRcssFile(const std::string& rcss_path, std::string& out_error);
 };
 
+std::string StripUtf8Bom(const std::string& raw);
 std::string SanitizeRcssForRmlUi(const std::string& raw_rcss);
+std::string FormatRmlLength(float px_val, float ref_dim_px, RmlCssUnit unit, float em_base_px = 14.0f, float dp_ratio = 1.0f);

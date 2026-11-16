@@ -15,6 +15,7 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 namespace {
@@ -22,11 +23,23 @@ namespace {
 struct AppState {
     GLFWwindow* window = nullptr;
     StudioUI* ui = nullptr;
+    RmlEngineHost* engine = nullptr;
     bool fullscreen = false;
     int saved_x = 80;
     int saved_y = 60;
     int saved_w = 1440;
     int saved_h = 860;
+    float content_scale_x = 1.0f;
+    float content_scale_y = 1.0f;
+
+    void UpdateContentScale() {
+        if (!window) return;
+        float xs = 1.0f, ys = 1.0f;
+        glfwGetWindowContentScale(window, &xs, &ys);
+        content_scale_x = (xs > 0.0f) ? xs : 1.0f;
+        content_scale_y = (ys > 0.0f) ? ys : 1.0f;
+        if (engine) engine->SetEditorDpiScale(content_scale_x);
+    }
 
     void ToggleFullscreen() {
         if (!window) return;
@@ -48,10 +61,10 @@ struct AppState {
         int win_w = 1, win_h = 1, fb_w = 1, fb_h = 1;
         glfwGetWindowSize(window, &win_w, &win_h);
         glfwGetFramebufferSize(window, &fb_w, &fb_h);
-        double sx = (win_w > 0) ? (static_cast<double>(fb_w) / static_cast<double>(win_w)) : 1.0;
-        double sy = (win_h > 0) ? (static_cast<double>(fb_h) / static_cast<double>(win_h)) : 1.0;
-        out_x = static_cast<int>(wx * sx);
-        out_y = static_cast<int>(wy * sy);
+        double sx = (win_w > 0 && fb_w > 0) ? (static_cast<double>(fb_w) / static_cast<double>(win_w)) : static_cast<double>(content_scale_x);
+        double sy = (win_h > 0 && fb_h > 0) ? (static_cast<double>(fb_h) / static_cast<double>(win_h)) : static_cast<double>(content_scale_y);
+        out_x = static_cast<int>(std::lround(wx * sx));
+        out_y = static_cast<int>(std::lround(wy * sy));
     }
 };
 
@@ -66,6 +79,7 @@ int main(int, char**) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
 #ifdef __APPLE__
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 #endif
@@ -76,9 +90,10 @@ int main(int, char**) {
         glfwTerminate();
         return 1;
     }
+    glfwSetWindowAttrib(window, GLFW_AUTO_ICONIFY, GLFW_FALSE);
 
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(1);
+    glfwSwapInterval(0);
     Platform::ApplyDarkTitlebar(window);
 
     GlRenderer2D gl_renderer;
@@ -114,13 +129,28 @@ int main(int, char**) {
     AppState app;
     app.window = window;
     app.ui = &ui;
+    app.engine = &engine;
+    app.UpdateContentScale();
     ui.SetToggleFullscreenCallback([&app]() { app.ToggleFullscreen(); });
 
     glfwSetWindowUserPointer(window, &app);
 
+    glfwSetWindowContentScaleCallback(window, [](GLFWwindow* w, float /*xs*/, float /*ys*/) {
+        auto* st = static_cast<AppState*>(glfwGetWindowUserPointer(w));
+        if (st) {
+            st->UpdateContentScale();
+            int fb_w = 0, fb_h = 0;
+            glfwGetFramebufferSize(w, &fb_w, &fb_h);
+            if (st->ui && fb_w > 0 && fb_h > 0) {
+                st->ui->OnResize(fb_w, fb_h);
+            }
+        }
+    });
+
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int width, int height) {
         auto* st = static_cast<AppState*>(glfwGetWindowUserPointer(w));
         if (st && st->ui && width > 0 && height > 0) {
+            st->UpdateContentScale();
             st->ui->OnResize(width, height);
         }
     });

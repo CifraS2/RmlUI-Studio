@@ -47,10 +47,16 @@ endif()
 # 4. RmlUI Studio (Cross-platform C++17 + RmlUi + OpenGL 3.3 + GLFW)
 set(STUDIO_SOURCES
     src/main.cpp
+    src/command_history.h
+    src/command_history.cpp
+    src/gizmo_manipulator.h
+    src/gizmo_manipulator.cpp
     src/gl_renderer.h
     src/gl_renderer.cpp
     src/platform_utils.h
     src/platform_utils.cpp
+    src/rml_diagnostics.h
+    src/rml_diagnostics.cpp
     src/rml_doc.h
     src/rml_doc.cpp
     src/rml_engine.h
@@ -59,6 +65,8 @@ set(STUDIO_SOURCES
     src/studio_icons.cpp
     src/studio_ui.h
     src/studio_ui.cpp
+    src/viewport_controller.h
+    src/viewport_controller.cpp
     third_party/RmlUi/Backends/RmlUi_Platform_GLFW.cpp
     third_party/RmlUi/Backends/RmlUi_Renderer_GL3.cpp
 )
